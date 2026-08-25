@@ -13,29 +13,64 @@ COL_WIDTHS = [12, 20, 26, 14, 14, 16, 26, 45]
 # akan 100% akurat untuk semua kasus -- anggap ini kategori awal yang masih
 # perlu dicek ulang untuk baris yang jatuh ke "Lainnya / Perlu Verifikasi".
 
-OWNER_KEYWORDS = ('AHMAD ROZIYAN', 'STOASPACE', 'STOA COFFEE', 'STOA SPACE', 'PT STOASPACE')
+# --- kategori transaksi untuk kebutuhan akuntansi operasional Stoa -------
+# Heuristik berbasis kata kunci pada objek/catatan, plus lookup merchant dan
+# nomor rekening spesifik yang sudah dikonfirmasi user lewat feedback.
+# Tetap belum 100% akurat untuk semua kasus (lihat catatan di bawah).
+
+OWNER_KEYWORDS = ('AHMAD ROZIYAN', 'ROZIYAN HIDAYAT', 'OJAN')
 DEBT_KEYWORDS = ('CICILAN', 'ANGSURAN', 'BAYAR SB', 'PINJAM', 'UTANG')
 UTILITY_KEYWORDS = ('SEWA', 'LISTRIK', ' PLN', 'AIR STO', 'UTILITAS')
-WALLET_KEYWORDS = ('SHOPEE', 'OVO ', ' OVO', 'GOPAY', 'DANA ', 'TELKOMSEL', 'TOP UP', 'ISI SALDO', 'PULSA')
-PURCHASE_KEYWORDS = ('BELANJA', 'BELI ', 'ONGKIR', 'BAHAN', 'SUPPLIER', 'GANTI UANG BELANJA')
+WALLET_KEYWORDS = ('SHOPEE', 'OVO ', ' OVO', 'GOPAY', 'DANA ', 'TELKOMSEL', 'TOP UP', 'ISI SALDO', 'PULSA', 'BRIVA')
+PURCHASE_KEYWORDS = ('BELANJA', 'BELI ', 'ONGKIR', 'SUPPLIER', 'GANTI UANG BELANJA')
 TRANSFER_TYPES = ('TRANSFER', 'TRSF', 'BI-FAST', 'SWITCHING', 'KIRIM')
 
+# merchant/rekening spesifik yang kategorinya sudah dikonfirmasi user secara
+# eksplisit -- dicocokkan sebagai substring pada Objek Transaksi (jadi tetap
+# kena walau namanya terpotong di statement, mis. "DECO COFFEE I")
+MERCHANT_CATEGORY_MAP = {
+    'CV HARAPAN KITA': 'Belanja Operasional',
+    'CV HARAPAN': 'Belanja Operasional',
+    'MIRA LAUNDRY': 'Belanja Operasional',
+    'ORIEL CHICKEN': 'Belanja Konsumsi',
+    'DECO COFFEE': 'Belanja Konsumsi',
+    'TRANSFERPAY': 'Penjualan',
+    'NIDAUL JIHAD': 'Belanja Bahan',
+    'DEWA AYU EKA FERR': 'Belanja Konsumsi',
+}
+
+# nomor rekening/identitas yang terbukti milik pemilik usaha (setoran modal
+# atau tarik modal), dikonfirmasi user
+KNOWN_OWNER_ACCOUNTS = {
+    '473501000343538',
+}
+
 CATEGORIES_REFERENCE = [
-    'Penjualan / Pendapatan Usaha',
-    'Pembelian Bahan & Operasional',
+    'Penjualan',
+    'Belanja Bahan',
+    'Belanja Konsumsi',
+    'Belanja Operasional',
     'Sewa & Utilitas',
     'Cicilan & Utang',
     'Modal & Setoran Pemilik',
     'Biaya Admin & Pajak Bank',
-    'Top Up Dompet Digital',
     'Bunga Bank (Pendapatan)',
     'Transfer Lainnya',
     'Lainnya / Perlu Verifikasi',
 ]
 
 
+def _merchant_match(objek):
+    ob = (objek or '').upper()
+    for merchant, cat in MERCHANT_CATEGORY_MAP.items():
+        if merchant in ob:
+            return cat
+    return None
+
+
 def categorize(keterangan, objek, catatan, debit, kredit):
     ket = (keterangan or '').upper()
+    ob = (objek or '').upper()
     text = f"{keterangan or ''} {objek or ''} {catatan or ''}".upper()
 
     if ket == 'BUNGA':
@@ -44,22 +79,36 @@ def categorize(keterangan, objek, catatan, debit, kredit):
         return 'Saldo Awal (Bukan Transaksi)'
     if ket in ('PAJAK BUNGA', 'BIAYA ADMIN', 'BIAYA ADM'):
         return 'Biaya Admin & Pajak Bank'
+
+    merchant_hit = _merchant_match(objek)
+    if merchant_hit:
+        return merchant_hit
+
     if ket in ('PENJUALAN QRIS', 'KR OTOMATIS'):
-        return 'Penjualan / Pendapatan Usaha'
+        return 'Penjualan'
     if kredit and 'QRIS' in text:
-        return 'Penjualan / Pendapatan Usaha'
+        return 'Penjualan'
+
+    if any(acc in ob for acc in KNOWN_OWNER_ACCOUNTS):
+        return 'Modal & Setoran Pemilik'
+    if any(k in ob for k in OWNER_KEYWORDS):
+        return 'Modal & Setoran Pemilik'
+    if 'TARIK TUNAI' in text or ('SETOR' in text and 'SETORAN' not in ket):
+        return 'Modal & Setoran Pemilik'
+
     if any(k in text for k in DEBT_KEYWORDS):
         return 'Cicilan & Utang'
     if any(k in text for k in UTILITY_KEYWORDS):
         return 'Sewa & Utilitas'
-    if any(k in text for k in OWNER_KEYWORDS) or 'TARIK TUNAI' in text or 'SETOR' in text:
-        return 'Modal & Setoran Pemilik'
     if any(k in text for k in WALLET_KEYWORDS):
-        return 'Top Up Dompet Digital'
+        return 'Belanja Operasional'
     if any(k in text for k in PURCHASE_KEYWORDS):
-        return 'Pembelian Bahan & Operasional'
+        return 'Belanja Operasional'
     if any(k in ket for k in TRANSFER_TYPES):
-        return 'Transfer Lainnya'
+        # transfer generik ke pihak yang belum dikenali -- default ke
+        # Belanja Operasional untuk yang keluar (paling umum di data),
+        # selain itu masuk ke Transfer Lainnya untuk dicek manual
+        return 'Belanja Operasional' if debit else 'Transfer Lainnya'
     return 'Lainnya / Perlu Verifikasi'
 
 
