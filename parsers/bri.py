@@ -87,6 +87,13 @@ def parse_description(desc):
         return m.group(1), m.group(2).strip(), ''
     if desc.upper().startswith('QRIS'):
         return 'QRIS', '', desc
+    # BRI's own internal-transfer labels, e.g. "IBIZ PT STOASPACE R TO
+    # AHMAD ROZIYAN HID" or "NBMB AHMAD ROZIYAN TO FLIPTECH LENTERA" —
+    # keep the original description as jenis, but pull the recipient
+    # (the part after "TO") into objek.
+    m_to = re.match(r'^(.+?)\s+TO\s+(.+)$', desc)
+    if m_to and m_to.group(2).strip():
+        return desc, m_to.group(2).strip(), ''
     # generic "... ke X" / "... dari X [via Y]" — X is the recipient/sender
     m3 = re.match(r'^.*?\b(?:ke|dari)\b\s+(.+?)(?:\s+via\s+.+)?$', desc, re.I)
     if m3 and m3.group(1).strip():
