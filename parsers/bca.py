@@ -28,11 +28,24 @@ KNOWN_TYPES = [
 ]
 
 
+DISPLAY_LABEL_OVERRIDES = {
+    'KR OTOMATIS': 'Penjualan QRIS',
+    'BIAYA ADM': 'Biaya Admin',
+}
+
+
 def canonical_type(raw_label):
     for t in KNOWN_TYPES:
         if raw_label.startswith(t):
             return t, raw_label[len(t):].strip()
     return raw_label.strip(), ''
+
+
+def display_label(canon, header_extra):
+    """Map the internal detection type to the label shown in column B."""
+    if canon.startswith('BI-FAST') and header_extra.startswith('BIF BIAYA TXN KE'):
+        return 'Biaya Admin'
+    return DISPLAY_LABEL_OVERRIDES.get(canon, canon)
 
 
 def to_float(s):
@@ -226,6 +239,7 @@ def build_rows(pdf_path):
 
         canon, header_extra = canonical_type(label_raw)
         objek, catatan = extract_object_and_note(canon, header_extra, b['details'])
+        keterangan_label = display_label(canon, header_extra)
 
         is_debit = bool(db_flag)
         debit = amount if is_debit else None
@@ -244,7 +258,7 @@ def build_rows(pdf_path):
 
         rows.append({
             'tanggal': f'{ddmm}/{year}' if year else ddmm,
-            'keterangan': canon,
+            'keterangan': keterangan_label,
             'debit': debit, 'kredit': kredit,
             'saldo': running_balance,
             'objek': objek, 'catatan': catatan,
