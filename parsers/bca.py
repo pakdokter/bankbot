@@ -1,7 +1,7 @@
 import re
 import sys
 import pdfplumber
-from .common import write_xlsx, apply_universal_fields, ACCOUNT_CODES
+from .common import write_xlsx, apply_universal_fields, ACCOUNT_CODES, month_name, build_filename
 
 MONTH_MAP = {
     'JANUARI': '01', 'FEBRUARI': '02', 'MARET': '03', 'APRIL': '04',
@@ -77,8 +77,8 @@ def extract_lines(pdf_path):
                     if m:
                         periode_month = MONTH_MAP.get(m.group(1))
                         periode_year = m.group(2)
-                if line.startswith('NO. REKENING') and account_number is None:
-                    m = re.search(r':\s*(\d+)', line)
+                if 'NO. REKENING' in line and account_number is None:
+                    m = re.search(r'NO\.\s*REKENING\s*:\s*(\d+)', line)
                     if m:
                         account_number = m.group(1)
                 if page_idx == 0 and account_holder is None and line.startswith('KCP') and i + 1 < len(raw_lines):
@@ -288,15 +288,17 @@ def build_rows(pdf_path):
 
     saldo_akhir = running_balance
     apply_universal_fields(rows, self_code, ENTITY_CODE_MAP)
-    return rows, warnings, saldo_awal, saldo_akhir, self_code
+    meta = {'self_code': self_code, 'bulan': month_name(month), 'tahun': year}
+    return rows, warnings, saldo_awal, saldo_akhir, self_code, meta
 
 
 if __name__ == '__main__':
     pdf_path = sys.argv[1]
     out_path = sys.argv[2]
-    rows, warnings, saldo_awal, saldo_akhir, self_code = build_rows(pdf_path)
+    rows, warnings, saldo_awal, saldo_akhir, self_code, meta = build_rows(pdf_path)
     write_xlsx(rows, out_path, saldo_awal=saldo_awal, saldo_akhir=saldo_akhir)
     print(f'Total baris: {len(rows)}')
+    print('Nama file disarankan:', build_filename(meta['self_code'], meta['bulan'], meta['tahun']))
     if warnings:
         print(f'PERINGATAN ({len(warnings)}):')
         for w in warnings:
