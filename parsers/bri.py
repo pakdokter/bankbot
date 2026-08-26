@@ -1,7 +1,7 @@
 import re
 import sys
 import pdfplumber
-from .common import write_xlsx
+from .common import write_xlsx, apply_universal_fields, ACCOUNT_CODES
 
 HEADER_RE = re.compile(
     r'^(\d{2}/\d{2}/\d{2})\s+(\d{2}:\d{2}:\d{2})\s+(.+?)\s+'
@@ -19,14 +19,29 @@ SKIP_STARTS = (
     'DUSUN', 'KAB.', 'PATTIMURA', 'PR,OVINSI',
 )
 
+ACCOUNT_NUMBER_MAP = {
+    '015701106040507': ACCOUNT_CODES['bri_personal'],
+    '015701001903567': ACCOUNT_CODES['bri_business'],
+}
+
+KNOWN_ENTITY_LABELS = {
+    '473501000343538': 'Rekening Keluarga/Owner (...538)',
+}
+
 
 def to_float(s):
     return float(s.replace(',', ''))
 
 
+def extract_account_number(pdf_path):
+    with pdfplumber.open(pdf_path) as pdf:
+        text = pdf.pages[0].extract_text() or ''
+    m = re.search(r'No\.\s*Rekening[\s\S]{0,40}?:\s*(\d+)', text)
+    return m.group(1) if m else None
+
+
 def extract_lines(pdf_path):
     lines = []
-    header_name, header_periode = None, None
     with pdfplumber.open(pdf_path) as pdf:
         for page in pdf.pages:
             text = page.extract_text() or ''
@@ -36,28 +51,28 @@ def extract_lines(pdf_path):
                     continue
                 if line.startswith(SKIP_STARTS):
                     continue
-                # per-page footer watermark/stamp lines (file id, "Created
-                # By ...", print timestamp, trailing numeric doc code) —
-                # these repeat at the bottom of every page and must never
-                # be absorbed as a continuation of the last row on a page
                 if line.startswith(('AEAV', 'Created By', 'Statement')):
                     continue
                 if re.match(r'^\d{2}/\d{2}/\d{4}\s+\d{2}:\d{2}:\d{2}$', line):
                     continue
                 if re.match(r'^\d{10,}$', line):
                     continue
-                # skip the person/company name + address block right after
-                # "Kepada Yth." — heuristically these have no digits and are
-                # short lines already excluded by prefix checks above; the
-                # remaining letterhead lines are filtered by SKIP_STARTS.
                 lines.append(line)
-    # Everything from the closing summary table onward (Saldo Awal / Total
-    # Transaksi Debet / Terbilang / footer stamps) is not a transaction row.
-    # It always appears once, on the last page, after every real row.
+
+    saldo_awal, saldo_akhir = None, None
     for idx, l in enumerate(lines):
         if l.startswith('Saldo Awal'):
-            return lines[:idx]
-    return lines
+            # the figures are on a line shortly after this header (past the
+            # English translation line), e.g.
+            # "70,787.00 4,448,094.00 4,415,700.00 38,393.00"
+            for lookahead in lines[idx:idx + 4]:
+                m = re.match(r'^([\d,]+\.\d{2})\s+[\d,]+\.\d{2}\s+[\d,]+\.\d{2}\s+([\d,]+\.\d{2})\s*$', lookahead)
+                if m:
+                    saldo_awal = to_float(m.group(1))
+                    saldo_akhir = to_float(m.group(2))
+                    break
+            return lines[:idx], saldo_awal, saldo_akhir
+    return lines, saldo_awal, saldo_akhir
 
 
 FEE_EXACT = {'Admin Fee', 'Monthly Fee ATM'}
@@ -72,7 +87,10 @@ def is_fee_description(desc):
 
 
 def parse_description(desc):
-    """Return (jenis, objek, catatan) from a BRI Uraian Transaksi string."""
+    """Return (jenis, objek, catatan) from a BRI Uraian Transaksi string.
+    objek is None for the "X TO Y" internal-transfer pattern — the caller
+    (build_rows) must resolve it using transaction direction, since the
+    counterparty is X for a credit and Y for a debit."""
     desc = desc.strip()
     if is_fee_description(desc):
         return 'Biaya Admin', '', desc
@@ -87,13 +105,8 @@ def parse_description(desc):
         return m.group(1), m.group(2).strip(), ''
     if desc.upper().startswith('QRIS'):
         return 'QRIS', '', desc
-    # BRI's own internal-transfer labels, e.g. "IBIZ PT STOASPACE R TO
-    # AHMAD ROZIYAN HID" or "NBMB AHMAD ROZIYAN TO FLIPTECH LENTERA" —
-    # keep the original description as jenis, but pull the recipient
-    # (the part after "TO") into objek.
-    m_to = re.match(r'^(.+?)\s+TO\s+(.+)$', desc)
-    if m_to and m_to.group(2).strip():
-        return desc, m_to.group(2).strip(), ''
+    if re.match(r'^(.+?)\s+TO\s+(.+)$', desc):
+        return desc, None, ''
     # generic "... ke X" / "... dari X [via Y]" — X is the recipient/sender
     m3 = re.match(r'^.*?\b(?:ke|dari)\b\s+(.+?)(?:\s+via\s+.+)?$', desc, re.I)
     if m3 and m3.group(1).strip():
@@ -105,7 +118,21 @@ def parse_description(desc):
 
 
 def build_rows(pdf_path):
-    lines = extract_lines(pdf_path)
+    account_number = extract_account_number(pdf_path)
+    self_code = ACCOUNT_NUMBER_MAP.get(account_number, account_number or 'BRI')
+
+    # The counterpart in BRI's own "X TO Y" internal-transfer labels is
+    # bank-context-dependent: from the personal account (507) the business
+    # account shows up as "IBIZ PT STOASPACE ...", from the business account
+    # (567) the personal account shows up as "... TO AHMAD ROZIYAN ...".
+    entity_code_map = dict(KNOWN_ENTITY_LABELS)
+    if self_code == ACCOUNT_CODES['bri_personal']:
+        entity_code_map['IBIZ'] = ACCOUNT_CODES['bri_business']
+        entity_code_map['STOASPACE'] = ACCOUNT_CODES['bri_business']
+    elif self_code == ACCOUNT_CODES['bri_business']:
+        entity_code_map['AHMAD ROZIYAN'] = ACCOUNT_CODES['bri_personal']
+
+    lines, saldo_awal, saldo_akhir = extract_lines(pdf_path)
     rows = []
     i = 0
     n = len(lines)
@@ -115,14 +142,12 @@ def build_rows(pdf_path):
             i += 1
             continue
         date_s, time_s, mid, debet_s, kredit_s, saldo_s = m.groups()
-        # absorb continuation lines (wrapped description) until next header
         j = i + 1
         extra_desc = []
         while j < n and not HEADER_RE.match(lines[j]):
             extra_desc.append(lines[j])
             j += 1
 
-        # last whitespace token of `mid` may be a teller/user id
         tokens = mid.rsplit(' ', 1)
         teller = ''
         desc_full = mid
@@ -138,17 +163,18 @@ def build_rows(pdf_path):
         kredit = to_float(kredit_s)
         saldo = to_float(saldo_s)
 
-        # BRI prints a transaction fee as its own row with the exact same
-        # Uraian Transaksi as the transfer/top-up it belongs to, just with a
-        # small nominal (Rp 1.000 - Rp 6.500) right after it.
+        if objek is None:
+            # "X TO Y" — counterparty is the sender X for a credit (money
+            # came from X into this account) or the recipient Y for a debit
+            # (money left this account and went to Y)
+            m_to = re.match(r'^(.+?)\s+TO\s+(.+)$', desc_full)
+            objek = m_to.group(1).strip() if kredit > 0 else m_to.group(2).strip()
+
         if (rows and debet > 0 and debet <= 6500 and
                 rows[-1].get('_raw_desc') == desc_full):
             jenis, objek = 'Biaya Admin', ''
             catatan = f'Biaya terkait transaksi: {desc_full}'
 
-        # incoming money via QRIS is sales revenue for Stoa, not a generic
-        # "QRIS" label (also catches the rare rows where BRI's own PDF
-        # drops the "QRIS" prefix but it's still an OnUs/OffUs QRIS credit)
         desc_upper_compact = desc_full.upper().replace(' ', '')
         if kredit > 0 and ('QRIS' in desc_full.upper() or 'ONUS' in desc_upper_compact or 'OFFUS' in desc_upper_compact):
             jenis = 'Penjualan QRIS'
@@ -161,7 +187,7 @@ def build_rows(pdf_path):
         rows.append({
             'tanggal': tanggal_full,
             'keterangan': jenis,
-            'debit': debet if debet > 0 else None,
+            'debit': -debet if debet > 0 else None,
             'kredit': kredit if kredit > 0 else None,
             'saldo': saldo,
             'objek': objek,
@@ -171,12 +197,14 @@ def build_rows(pdf_path):
         i = j
     for r in rows:
         r.pop('_raw_desc', None)
-    return rows
+
+    apply_universal_fields(rows, self_code, entity_code_map)
+    return rows, saldo_awal, saldo_akhir, self_code
 
 
 if __name__ == '__main__':
     pdf_path = sys.argv[1]
     out_path = sys.argv[2]
-    rows = build_rows(pdf_path)
-    write_xlsx(rows, out_path)
+    rows, saldo_awal, saldo_akhir, self_code = build_rows(pdf_path)
+    write_xlsx(rows, out_path, saldo_awal=saldo_awal, saldo_akhir=saldo_akhir)
     print(f'Total baris: {len(rows)}')
