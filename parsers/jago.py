@@ -1,7 +1,7 @@
 import re
 import sys
 import pdfplumber
-from .common import write_xlsx, apply_universal_fields, ACCOUNT_CODES
+from .common import write_xlsx, apply_universal_fields, ACCOUNT_CODES, month_name, build_filename
 
 MONTH_MAP = {
     'Jan': '01', 'Feb': '02', 'Mar': '03', 'Apr': '04', 'Mei': '05', 'May': '05',
@@ -218,17 +218,25 @@ def build_rows(pdf_path):
         warning = f'Saldo akhir hasil konsolidasi {running:,.2f} != saldo akhir statement {saldo_akhir:,.2f}'
 
     apply_universal_fields(rows, ACCOUNT_CODES['jago'], {})
-    return rows, saldo_awal, saldo_akhir, warning
+
+    bulan, tahun = '', ''
+    ref = rows[0] if rows else (txns[0] if txns else None)
+    if ref:
+        d, m, y = ref['tanggal'].split('/')
+        bulan, tahun = month_name(m), y
+    meta = {'self_code': ACCOUNT_CODES['jago'], 'bulan': bulan, 'tahun': tahun}
+    return rows, saldo_awal, saldo_akhir, warning, meta
 
 
 if __name__ == '__main__':
     pdf_path = sys.argv[1]
     out_path = sys.argv[2]
-    rows, saldo_awal, saldo_akhir, warning = build_rows(pdf_path)
+    rows, saldo_awal, saldo_akhir, warning, meta = build_rows(pdf_path)
     write_xlsx(rows, out_path, saldo_awal=saldo_awal, saldo_akhir=saldo_akhir)
     print(f'Total baris (transaksi eksternal saja): {len(rows)}')
     print(f'Saldo awal konsolidasi: {saldo_awal}')
     print(f'Saldo akhir statement (anchor): {saldo_akhir}')
+    print('Nama file disarankan:', build_filename(meta['self_code'], meta['bulan'], meta['tahun']))
     if warning:
         print('PERINGATAN:', warning)
     else:
