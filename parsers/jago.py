@@ -1,7 +1,7 @@
 import re
 import sys
 import pdfplumber
-from .common import write_xlsx
+from .common import write_xlsx, apply_universal_fields, ACCOUNT_CODES
 
 MONTH_MAP = {
     'Jan': '01', 'Feb': '02', 'Mar': '03', 'Apr': '04', 'Mei': '05', 'May': '05',
@@ -11,7 +11,7 @@ MONTH_MAP = {
 
 KNOWN_LABELS = sorted([
     'Isi Saldo Dompet Digital', 'Tarik Uang Kantong', 'Tambah Uang Kantong',
-    'Transfer Masuk', 'Transfer Keluar', 'Pembayaran QRIS',
+    'Transfer Masuk', 'Transfer Keluar', 'Pembayaran QRIS', 'Transaksi POS',
     'Pajak Bunga', 'Bunga',
 ], key=len, reverse=True)
 
@@ -188,7 +188,7 @@ def build_rows(pdf_path):
     rows = []
     running = saldo_awal if saldo_awal is not None else 0.0
     for t in external:
-        debit = -t['jumlah'] if t['jumlah'] < 0 else None
+        debit = t['jumlah'] if t['jumlah'] < 0 else None
         kredit = t['jumlah'] if t['jumlah'] > 0 else None
         running = round(running + t['jumlah'], 2)
 
@@ -217,6 +217,7 @@ def build_rows(pdf_path):
     if saldo_akhir is not None and abs(running - saldo_akhir) > 0.01:
         warning = f'Saldo akhir hasil konsolidasi {running:,.2f} != saldo akhir statement {saldo_akhir:,.2f}'
 
+    apply_universal_fields(rows, ACCOUNT_CODES['jago'], {})
     return rows, saldo_awal, saldo_akhir, warning
 
 
@@ -224,7 +225,7 @@ if __name__ == '__main__':
     pdf_path = sys.argv[1]
     out_path = sys.argv[2]
     rows, saldo_awal, saldo_akhir, warning = build_rows(pdf_path)
-    write_xlsx(rows, out_path)
+    write_xlsx(rows, out_path, saldo_awal=saldo_awal, saldo_akhir=saldo_akhir)
     print(f'Total baris (transaksi eksternal saja): {len(rows)}')
     print(f'Saldo awal konsolidasi: {saldo_awal}')
     print(f'Saldo akhir statement (anchor): {saldo_akhir}')
