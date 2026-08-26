@@ -8,7 +8,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, ContextTyp
 
 from parsers.detect import parse_statement, BANK_LABELS
 from parsers import kasir as kasir_parser
-from parsers.common import write_xlsx
+from parsers.common import write_xlsx, build_filename
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -35,12 +35,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE, doc, tmp):
     pdf_path = os.path.join(tmp, doc.file_name)
-    xlsx_path = os.path.join(tmp, os.path.splitext(doc.file_name)[0] + '.xlsx')
 
     tg_file = await doc.get_file()
     await tg_file.download_to_drive(pdf_path)
 
-    bank, info = parse_statement(pdf_path, xlsx_path)
+    bank, info, xlsx_path = parse_statement(pdf_path, tmp)
     caption_lines = [
         f"Bank terdeteksi: {BANK_LABELS.get(bank, bank)}",
         f"Total baris transaksi: {info.get('jumlah_baris')}",
@@ -54,12 +53,13 @@ async def handle_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE, doc, tm
 
 async def handle_kasir(update: Update, context: ContextTypes.DEFAULT_TYPE, doc, tmp):
     src_path = os.path.join(tmp, doc.file_name)
-    xlsx_path = os.path.join(tmp, os.path.splitext(doc.file_name)[0] + '_converted.xlsx')
 
     tg_file = await doc.get_file()
     await tg_file.download_to_drive(src_path)
 
-    rows, saldo_awal, saldo_akhir, info = kasir_parser.build_rows(src_path)
+    rows, saldo_awal, saldo_akhir, info, meta = kasir_parser.build_rows(src_path)
+    filename = build_filename(meta['self_code'], meta['bulan'], meta['tahun'])
+    xlsx_path = os.path.join(tmp, filename)
     write_xlsx(rows, xlsx_path, saldo_awal=saldo_awal, saldo_akhir=saldo_akhir)
 
     caption_lines = [
