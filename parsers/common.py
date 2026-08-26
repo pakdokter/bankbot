@@ -1,3 +1,4 @@
+import re
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment
 
@@ -7,6 +8,27 @@ HEADERS = [
 ]
 
 COL_WIDTHS = [12, 24, 24, 16, 16, 16, 20, 24, 40]
+
+INDO_MONTHS = [
+    'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
+    'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember',
+]
+
+
+def month_name(month_num):
+    """month_num: int or numeric string (1-12) -> Indonesian month name."""
+    try:
+        return INDO_MONTHS[int(month_num) - 1]
+    except (TypeError, ValueError, IndexError):
+        return ''
+
+
+def build_filename(self_code, bulan, tahun, ext='xlsx'):
+    """'BCA-887', 'Januari', '2025' -> 'BCA-887 Januari 2025.xlsx'"""
+    parts = [p for p in (self_code or 'Rekening', bulan or '', str(tahun or '')) if p]
+    name = ' '.join(parts).strip()
+    name = re.sub(r'[\\/:*?"<>|]', '_', name)
+    return f'{name}.{ext}'
 
 # Konvensi tanda: Debit = uang KELUAR (disimpan NEGATIF, tampil dalam kurung
 # lewat number_format akuntansi), Kredit = uang MASUK (positif). Ini mengikuti
