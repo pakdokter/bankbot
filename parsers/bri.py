@@ -1,7 +1,7 @@
 import re
 import sys
 import pdfplumber
-from .common import write_xlsx, apply_universal_fields, ACCOUNT_CODES
+from .common import write_xlsx, apply_universal_fields, ACCOUNT_CODES, month_name, build_filename
 
 HEADER_RE = re.compile(
     r'^(\d{2}/\d{2}/\d{2})\s+(\d{2}:\d{2}:\d{2})\s+(.+?)\s+'
@@ -199,12 +199,19 @@ def build_rows(pdf_path):
         r.pop('_raw_desc', None)
 
     apply_universal_fields(rows, self_code, entity_code_map)
-    return rows, saldo_awal, saldo_akhir, self_code
+
+    bulan, tahun = '', ''
+    if rows:
+        d, m, y = rows[0]['tanggal'].split('/')
+        bulan, tahun = month_name(m), y
+    meta = {'self_code': self_code, 'bulan': bulan, 'tahun': tahun}
+    return rows, saldo_awal, saldo_akhir, self_code, meta
 
 
 if __name__ == '__main__':
     pdf_path = sys.argv[1]
     out_path = sys.argv[2]
-    rows, saldo_awal, saldo_akhir, self_code = build_rows(pdf_path)
+    rows, saldo_awal, saldo_akhir, self_code, meta = build_rows(pdf_path)
     write_xlsx(rows, out_path, saldo_awal=saldo_awal, saldo_akhir=saldo_akhir)
     print(f'Total baris: {len(rows)}')
+    print('Nama file disarankan:', build_filename(meta['self_code'], meta['bulan'], meta['tahun']))
