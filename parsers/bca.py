@@ -1,8 +1,7 @@
 import re
 import sys
 import pdfplumber
-from datetime import datetime
-from .common import write_xlsx
+from .common import write_xlsx, apply_universal_fields, ACCOUNT_CODES
 
 MONTH_MAP = {
     'JANUARI': '01', 'FEBRUARI': '02', 'MARET': '03', 'APRIL': '04',
@@ -24,13 +23,25 @@ KNOWN_TYPES = [
     'BI-FAST DB', 'BI-FAST CR',
     'SWITCHING DB', 'SWITCHING CR',
     'KR OTOMATIS',
+    'SETORAN VIA CDM', 'KARTU DEBIT',
     'BIAYA ADM', 'BUNGA', 'PAJAK BUNGA',
 ]
 
-
 DISPLAY_LABEL_OVERRIDES = {
-    'KR OTOMATIS': 'Penjualan QRIS',
     'BIAYA ADM': 'Biaya Admin',
+}
+
+# rekening BCA milik Stoa yang sudah dikenal -> kode singkat untuk kolom
+# Subjek/Objek (dipetakan dari NO. REKENING di header statement)
+ACCOUNT_NUMBER_MAP = {
+    '0561864887': ACCOUNT_CODES['bca_887'],
+    '7257104417': ACCOUNT_CODES['bca_417'],
+    '7255353292': ACCOUNT_CODES['bca_giro'],
+}
+# entitas lain yang dikenali sebagai rekening Stoa sendiri (untuk kolom
+# Subjek/Objek saat entitas itu muncul sebagai lawan transaksi)
+ENTITY_CODE_MAP = {
+    'STOASPACE RASA': ACCOUNT_CODES['bca_giro'],
 }
 
 
@@ -42,7 +53,6 @@ def canonical_type(raw_label):
 
 
 def display_label(canon, header_extra):
-    """Map the internal detection type to the label shown in column B."""
     if canon.startswith('BI-FAST') and header_extra.startswith('BIF BIAYA TXN KE'):
         return 'Biaya Admin'
     return DISPLAY_LABEL_OVERRIDES.get(canon, canon)
@@ -55,24 +65,25 @@ def to_float(s):
 def extract_lines(pdf_path):
     lines = []
     periode_year, periode_month = None, None
+    account_number, account_holder = None, None
     with pdfplumber.open(pdf_path) as pdf:
-        for page in pdf.pages:
+        for page_idx, page in enumerate(pdf.pages):
             text = page.extract_text() or ''
             raw_lines = [l.strip() for l in text.split('\n') if l.strip()]
 
-            for line in raw_lines:
+            for i, line in enumerate(raw_lines):
                 if line.startswith('PERIODE'):
                     m = re.search(r'PERIODE\s*:\s*([A-Z]+)\s+(\d{4})', line)
                     if m:
                         periode_month = MONTH_MAP.get(m.group(1))
                         periode_year = m.group(2)
+                if line.startswith('NO. REKENING') and account_number is None:
+                    m = re.search(r':\s*(\d+)', line)
+                    if m:
+                        account_number = m.group(1)
+                if page_idx == 0 and account_holder is None and line.startswith('KCP') and i + 1 < len(raw_lines):
+                    account_holder = raw_lines[i + 1].strip()
 
-            # Only the transaction table area matters: everything between the
-            # "TANGGAL KETERANGAN CBG MUTASI SALDO" header row and either the
-            # "Bersambung..." footer or end of page. This avoids leaking any
-            # repeated letterhead/CATATAN boilerplate (including wrapped
-            # continuation lines that don't start with a recognizable marker)
-            # into transaction detail lines near a page break.
             try:
                 start = next(i for i, l in enumerate(raw_lines) if l.startswith('TANGGAL KETERANGAN'))
             except StopIteration:
@@ -83,11 +94,10 @@ def extract_lines(pdf_path):
                     end = i
                     break
             lines.extend(raw_lines[start + 1:end])
-    return lines, periode_month, periode_year
+    return lines, periode_month, periode_year, account_number, account_holder
 
 
 def parse_blocks(lines):
-    """Group lines into (header_match, detail_lines) blocks."""
     blocks = []
     current = None
     for line in lines:
@@ -98,7 +108,6 @@ def parse_blocks(lines):
             current = {'header': m, 'details': []}
         elif line.startswith('SALDO AWAL') or line.startswith('MUTASI CR') or \
              line.startswith('MUTASI DB') or line.startswith('SALDO AKHIR'):
-            # footer summary lines — stop collecting details for these
             if current:
                 blocks.append(current)
                 current = None
@@ -112,8 +121,11 @@ def parse_blocks(lines):
 
 
 def extract_object_and_note(canon_type, header_extra, details):
-    """Return (objek, keterangan_tambahan) using per-type heuristics."""
-    # strip pure amount-echo lines (redundant with mutasi) and placeholder dashes
+    """Return (objek, keterangan_tambahan, is_qris) using per-type heuristics.
+    is_qris is only meaningful for 'KR OTOMATIS' (True = confirmed QRIS/EDC
+    merchant settlement via the MID:/QR:/DDR: fields, False = some other kind
+    of automatic BCA credit, e.g. 'AutoCr-PL', that should NOT be relabeled
+    Penjualan QRIS)."""
     clean = []
     va_code = None
     va_merchant = None
@@ -138,7 +150,7 @@ def extract_object_and_note(canon_type, header_extra, details):
         if va_number:
             note_parts.append(f'No. VA/ref: {va_number}')
         note_parts.extend(clean)
-        return objek, '; '.join(note_parts)
+        return objek, '; '.join(note_parts), None
 
     if canon_type in ('TRANSAKSI DEBIT', 'TRANSAKSI KREDIT'):
         objek, note = '', []
@@ -146,26 +158,24 @@ def extract_object_and_note(canon_type, header_extra, details):
             m = QR_MERCHANT_RE.match(d)
             if m and m.group(1).strip():
                 objek = m.group(1).strip()
-            elif d.startswith('QR'):
-                note.append(d)
             else:
                 note.append(d)
-        return objek, '; '.join(note)
+        return objek, '; '.join(note), None
 
     if canon_type.startswith('BI-FAST'):
-        # order is always [bank/branch code, object name, channel tag]
         codes = [d for d in clean if re.match(r'^\d{3}$', d)]
         rest = [d for d in clean if not re.match(r'^\d{3}$', d)]
         objek = rest[0] if rest else ''
         note = codes + rest[1:]
         if header_extra:
             note.insert(0, header_extra)
-        return objek, '; '.join(note)
+        return objek, '; '.join(note), None
 
     if canon_type == 'KR OTOMATIS':
         m = re.match(r'MID\s*:\s*(\d+)\s*(\d{3,4})?$', header_extra.strip())
         mid_no, cbg = (m.group(1), m.group(2) or '') if m else ('', '')
         merchant, qty_line, ddr_line, tgl_settle = '', '', '', ''
+        extra = []
         for d in clean:
             mt = re.match(r'^TANGGAL\s*:(\d{2}/\d{2})\s*(.*)$', d)
             if mt:
@@ -179,7 +189,11 @@ def extract_object_and_note(canon_type, header_extra, details):
                 qty_line = d
             elif not merchant:
                 merchant = d
+            else:
+                extra.append(d)
         note_parts = []
+        if header_extra and not m:
+            note_parts.append(header_extra)
         if mid_no:
             note_parts.append(f'MID: {mid_no}')
         if cbg:
@@ -190,34 +204,45 @@ def extract_object_and_note(canon_type, header_extra, details):
             note_parts.append(qty_line)
         if ddr_line:
             note_parts.append(ddr_line)
-        return merchant, '; '.join(note_parts)
+        note_parts.extend(extra)
+        return merchant, '; '.join(note_parts), bool(m)
 
     if canon_type.startswith('SWITCHING'):
         objek = ' '.join(clean) if clean else ''
-        return objek, header_extra
+        return objek, header_extra, None
+
+    if canon_type == 'SETORAN VIA CDM':
+        objek = clean[-1] if clean else ''
+        note = ([header_extra] if header_extra else []) + clean[:-1]
+        return objek, '; '.join(note), None
+
+    if canon_type == 'KARTU DEBIT':
+        # header_extra holds the merchant name (e.g. "SINAR BAHAGIA PANC")
+        return header_extra, '; '.join(clean), None
 
     if canon_type.startswith('TRSF E-BANKING'):
         if not clean:
-            return '', header_extra
+            return '', header_extra, None
         objek = clean[-1]
         note = clean[:-1]
         if header_extra:
             note = [header_extra] + note
-        return objek, '; '.join(note)
+        return objek, '; '.join(note), None
 
-    # fallback / BIAYA ADM / BUNGA / PAJAK BUNGA
     note = list(clean)
     if header_extra:
         note.insert(0, header_extra)
-    return '', '; '.join(note)
+    return '', '; '.join(note), None
 
 
 def build_rows(pdf_path):
-    lines, month, year = extract_lines(pdf_path)
+    lines, month, year, account_number, account_holder = extract_lines(pdf_path)
     blocks = parse_blocks(lines)
+    self_code = ACCOUNT_NUMBER_MAP.get(account_number, account_number or 'BCA')
 
     rows = []
     running_balance = None
+    saldo_awal = None
     warnings = []
 
     for b in blocks:
@@ -228,31 +253,28 @@ def build_rows(pdf_path):
 
         if label_raw.strip() == 'SALDO AWAL':
             running_balance = amount
-            rows.append({
-                'tanggal': f'{ddmm}/{year}' if year else ddmm,
-                'keterangan': 'SALDO AWAL',
-                'debit': None, 'kredit': None,
-                'saldo': running_balance,
-                'objek': '', 'catatan': '',
-            })
+            saldo_awal = amount
             continue
 
         canon, header_extra = canonical_type(label_raw)
-        objek, catatan = extract_object_and_note(canon, header_extra, b['details'])
-        keterangan_label = display_label(canon, header_extra)
+        objek, catatan, is_qris = extract_object_and_note(canon, header_extra, b['details'])
+        if canon == 'KR OTOMATIS':
+            keterangan_label = 'Penjualan QRIS' if is_qris else 'KR OTOMATIS'
+        else:
+            keterangan_label = display_label(canon, header_extra)
 
         is_debit = bool(db_flag)
-        debit = amount if is_debit else None
+        debit = -amount if is_debit else None
         kredit = None if is_debit else amount
 
         if running_balance is not None:
-            running_balance = running_balance + (kredit or 0) - (debit or 0)
+            running_balance = running_balance + (kredit or 0) - (-debit if debit else 0)
             running_balance = round(running_balance, 2)
             if saldo_printed is not None and abs(running_balance - saldo_printed) > 0.01:
                 warnings.append(
                     f"{ddmm} {canon}: saldo hitung {running_balance:,.2f} != saldo cetak {saldo_printed:,.2f}"
                 )
-                running_balance = saldo_printed  # re-sync to printed checkpoint
+                running_balance = saldo_printed
         else:
             running_balance = saldo_printed
 
@@ -264,14 +286,16 @@ def build_rows(pdf_path):
             'objek': objek, 'catatan': catatan,
         })
 
-    return rows, warnings
+    saldo_akhir = running_balance
+    apply_universal_fields(rows, self_code, ENTITY_CODE_MAP)
+    return rows, warnings, saldo_awal, saldo_akhir, self_code
 
 
 if __name__ == '__main__':
     pdf_path = sys.argv[1]
     out_path = sys.argv[2]
-    rows, warnings = build_rows(pdf_path)
-    write_xlsx(rows, out_path)
+    rows, warnings, saldo_awal, saldo_akhir, self_code = build_rows(pdf_path)
+    write_xlsx(rows, out_path, saldo_awal=saldo_awal, saldo_akhir=saldo_akhir)
     print(f'Total baris: {len(rows)}')
     if warnings:
         print(f'PERINGATAN ({len(warnings)}):')
