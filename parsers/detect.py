@@ -44,19 +44,21 @@ def parse_statement(pdf_path, out_path):
 
     mod = PARSERS[bank]
     info = {}
+    saldo_awal = saldo_akhir = None
 
     if bank == 'bca':
-        rows, warnings = mod.build_rows(pdf_path)
+        rows, warnings, saldo_awal, saldo_akhir, self_code = mod.build_rows(pdf_path)
         info['warnings'] = warnings
     elif bank == 'bri':
-        rows = mod.build_rows(pdf_path)
+        rows, saldo_awal, saldo_akhir, self_code = mod.build_rows(pdf_path)
     elif bank == 'jago':
         rows, saldo_awal, saldo_akhir, warning = mod.build_rows(pdf_path)
-        info['saldo_awal'] = saldo_awal
-        info['saldo_akhir'] = saldo_akhir
         info['warning'] = warning
 
+    info['saldo_awal'] = saldo_awal
+    info['saldo_akhir'] = saldo_akhir
+
     from .common import write_xlsx
-    write_xlsx(rows, out_path)
+    write_xlsx(rows, out_path, saldo_awal=saldo_awal, saldo_akhir=saldo_akhir)
     info['jumlah_baris'] = len(rows)
     return bank, info
