@@ -30,6 +30,11 @@ def build_filename(self_code, bulan, tahun, ext='xlsx'):
     name = re.sub(r'[\\/:*?"<>|]', '_', name)
     return f'{name}.{ext}'
 
+
+def sheet_title_from_meta(meta):
+    parts = [p for p in (meta.get('self_code') or 'Rekening', meta.get('bulan') or '', str(meta.get('tahun') or '')) if p]
+    return ' '.join(parts).strip()[:31]
+
 # Konvensi tanda: Debit = uang KELUAR (disimpan NEGATIF, tampil dalam kurung
 # lewat number_format akuntansi), Kredit = uang MASUK (positif). Ini mengikuti
 # label DB/CR asli tiap bank, bukan konvensi buku besar aset (yang membalik
@@ -230,19 +235,14 @@ def apply_universal_fields(rows, self_code='', entity_code_map=None):
     return rows
 
 
-def write_xlsx(rows, out_path, sheet_title='Mutasi', self_code='', entity_code_map=None,
-               saldo_awal=None, saldo_akhir=None):
-    """rows: list of dicts with keys tanggal, keterangan, debit (negative or
-    None), kredit (positive or None), saldo, objek, catatan. This function:
-    normalizes keterangan/kategori/subjek/objek uniformly, prepends a Saldo
-    Awal row (if saldo_awal is given), and appends a closing summary block
-    (Saldo Awal / Total Debit / Total Kredit / Saldo Akhir)."""
+def populate_sheet(ws, rows, self_code='', entity_code_map=None, saldo_awal=None, saldo_akhir=None):
+    """Fills one worksheet with the standard 9-column layout: header, an
+    optional opening-balance row, all transaction rows, and a closing
+    summary block. Shared by write_xlsx (single account) and
+    write_recon_xlsx (multiple accounts, one sheet each)."""
     if rows and 'subjek' not in rows[0]:
         apply_universal_fields(rows, self_code, entity_code_map)
 
-    wb = Workbook()
-    ws = wb.active
-    ws.title = sheet_title
     ws.append(HEADERS)
     for c in ws[1]:
         c.font = Font(name='Arial', bold=True)
@@ -303,5 +303,43 @@ def write_xlsx(rows, out_path, sheet_title='Mutasi', self_code='', entity_code_m
             if not cell.font.bold:
                 cell.font = Font(name='Arial')
 
+
+def write_xlsx(rows, out_path, sheet_title='Mutasi', self_code='', entity_code_map=None,
+               saldo_awal=None, saldo_akhir=None):
+    """rows: list of dicts with keys tanggal, keterangan, debit (negative or
+    None), kredit (positive or None), saldo, objek, catatan. This function:
+    normalizes keterangan/kategori/subjek/objek uniformly, prepends a Saldo
+    Awal row (if saldo_awal is given), and appends a closing summary block
+    (Saldo Awal / Total Debit / Total Kredit / Saldo Akhir)."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = sheet_title[:31]
+    populate_sheet(ws, rows, self_code, entity_code_map, saldo_awal, saldo_akhir)
+    wb.save(out_path)
+    return out_path
+
+
+def write_recon_xlsx(entries, out_path, include_blank_recon_tab=True):
+    """entries: list of dicts, one per account/kantong, each already fully
+    processed (rows carry subjek/objek/kategori already), with keys:
+    sheet_title, rows, saldo_awal, saldo_akhir. Writes one combined workbook
+    with one sheet per entry (each in the same 9-column layout), plus an
+    empty 'Rekonsiliasi' tab at the end as a starting point for manual
+    cross-referencing."""
+    wb = Workbook()
+    wb.remove(wb.active)
+    used_titles = set()
+    for e in entries:
+        title = (e['sheet_title'] or 'Sheet')[:31]
+        base, n = title, 2
+        while title in used_titles:
+            suffix = f' ({n})'
+            title = base[:31 - len(suffix)] + suffix
+            n += 1
+        used_titles.add(title)
+        ws = wb.create_sheet(title=title)
+        populate_sheet(ws, e['rows'], saldo_awal=e.get('saldo_awal'), saldo_akhir=e.get('saldo_akhir'))
+    if include_blank_recon_tab:
+        wb.create_sheet(title='Rekonsiliasi')
     wb.save(out_path)
     return out_path
