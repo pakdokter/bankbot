@@ -1,7 +1,7 @@
 import re
 import sys
 import openpyxl
-from .common import write_xlsx
+from .common import write_xlsx, month_name, build_filename
 
 MONTH_MAP = {
     'JANUARI': 1, 'FEBRUARI': 2, 'MARET': 3, 'APRIL': 4, 'MEI': 5, 'JUNI': 6,
@@ -195,14 +195,20 @@ def build_rows(xlsx_path, sheet_name=None):
         'toko_dikenali': matched_count,
         'tenant_lain': tenant_lain_count,
     }
-    return rows, saldo_awal, saldo_akhir, info
+    bulan, tahun = '', ''
+    if rows and rows[0]['tanggal']:
+        d, m, y = rows[0]['tanggal'].split('/')
+        bulan, tahun = month_name(m), y
+    meta = {'self_code': 'Kasir', 'bulan': bulan, 'tahun': tahun}
+    return rows, saldo_awal, saldo_akhir, info, meta
 
 
 if __name__ == '__main__':
     xlsx_path = sys.argv[1]
     out_path = sys.argv[2]
-    rows, saldo_awal, saldo_akhir, info = build_rows(xlsx_path)
+    rows, saldo_awal, saldo_akhir, info, meta = build_rows(xlsx_path)
     write_xlsx(rows, out_path, saldo_awal=saldo_awal, saldo_akhir=saldo_akhir)
     print(f'Total baris: {len(rows)}')
     print(f'Toko dikenali: {info["toko_dikenali"]}, Tenant Lain (pengeluaran): {info["tenant_lain"]}')
     print(f'Saldo awal: {saldo_awal}, Saldo akhir: {saldo_akhir}')
+    print('Nama file disarankan:', build_filename(meta['self_code'], meta['bulan'], meta['tahun']))
