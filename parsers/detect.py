@@ -36,7 +36,10 @@ BANK_LABELS = {
 def parse_statement(pdf_path, out_dir):
     """Detect the bank, run the matching parser, write the XLSX into out_dir
     using the "<Nama Kantong> <Bulan> <Tahun>.xlsx" naming convention (e.g.
-    "BCA-887 Januari 2025.xlsx"). Returns (bank_key, extra_info, out_path)."""
+    "BCA-887 Januari 2025.xlsx"). Returns (bank_key, extra_info, out_path,
+    rows, meta) — rows/meta are handy for callers that want to combine
+    several statements into one workbook (see common.write_recon_xlsx)
+    without re-parsing the PDF."""
     bank = sniff_bank(pdf_path)
     if bank is None:
         raise ValueError(
@@ -64,4 +67,4 @@ def parse_statement(pdf_path, out_dir):
     out_path = os.path.join(out_dir, filename)
     write_xlsx(rows, out_path, saldo_awal=saldo_awal, saldo_akhir=saldo_akhir)
     info['jumlah_baris'] = len(rows)
-    return bank, info, out_path
+    return bank, info, out_path, rows, meta
