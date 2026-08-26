@@ -1,6 +1,8 @@
+import os
 import pdfplumber
 
 from . import bca, bri, jago
+from .common import write_xlsx, build_filename
 
 
 def sniff_bank(pdf_path):
@@ -31,10 +33,10 @@ BANK_LABELS = {
 }
 
 
-def parse_statement(pdf_path, out_path):
-    """Detect the bank, run the matching parser, write the XLSX.
-    Returns (bank_key, extra_info) where extra_info is a dict with any
-    warnings/validation notes the parser produced (varies per bank)."""
+def parse_statement(pdf_path, out_dir):
+    """Detect the bank, run the matching parser, write the XLSX into out_dir
+    using the "<Nama Kantong> <Bulan> <Tahun>.xlsx" naming convention (e.g.
+    "BCA-887 Januari 2025.xlsx"). Returns (bank_key, extra_info, out_path)."""
     bank = sniff_bank(pdf_path)
     if bank is None:
         raise ValueError(
@@ -47,18 +49,19 @@ def parse_statement(pdf_path, out_path):
     saldo_awal = saldo_akhir = None
 
     if bank == 'bca':
-        rows, warnings, saldo_awal, saldo_akhir, self_code = mod.build_rows(pdf_path)
+        rows, warnings, saldo_awal, saldo_akhir, self_code, meta = mod.build_rows(pdf_path)
         info['warnings'] = warnings
     elif bank == 'bri':
-        rows, saldo_awal, saldo_akhir, self_code = mod.build_rows(pdf_path)
+        rows, saldo_awal, saldo_akhir, self_code, meta = mod.build_rows(pdf_path)
     elif bank == 'jago':
-        rows, saldo_awal, saldo_akhir, warning = mod.build_rows(pdf_path)
+        rows, saldo_awal, saldo_akhir, warning, meta = mod.build_rows(pdf_path)
         info['warning'] = warning
 
     info['saldo_awal'] = saldo_awal
     info['saldo_akhir'] = saldo_akhir
 
-    from .common import write_xlsx
+    filename = build_filename(meta['self_code'], meta['bulan'], meta['tahun'])
+    out_path = os.path.join(out_dir, filename)
     write_xlsx(rows, out_path, saldo_awal=saldo_awal, saldo_akhir=saldo_akhir)
     info['jumlah_baris'] = len(rows)
-    return bank, info
+    return bank, info, out_path
