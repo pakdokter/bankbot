@@ -43,7 +43,7 @@ KEYWORD_RULES = [(re.compile(pat, re.I), kat, obj) for pat, kat, obj in KEYWORD_
 KONSUMSI_RE = re.compile(r'KONSUMSI', re.I)
 PENJUALAN_RE = re.compile(r'PENJUALAN', re.I)
 BUNGA_RE = re.compile(r'BUNGA', re.I)
-BIAYA_ADMIN_RE = re.compile(r'BIAYA\s*ADMIN|PAJAK', re.I)
+BIAYA_ADMIN_RE = re.compile(r'BIAYA\s*ADMIN|PAJAK|ADMIN\s*TRANSFER', re.I)
 FLIPTECH_RE = re.compile(r'FLIPTECH', re.I)
 
 
@@ -60,9 +60,9 @@ def _apply_keyword_overrides(keterangan, kategori, objek, catatan):
         return 'Penjualan', 'Penjualan', objek
 
     if BIAYA_ADMIN_RE.search(text):
-        return 'Biaya Admin', 'Biaya Admin', objek
+        return 'Biaya Admin', 'Biaya Admin Bank', objek
     if BUNGA_RE.search(text):
-        return 'Bunga Bank', 'Bunga Bank', objek
+        return 'Bunga Bank', 'Biaya Admin Bank', objek
 
     new_keterangan = 'Belanja Konsumsi' if KONSUMSI_RE.search(text) else keterangan
     new_kategori, new_objek = kategori, objek
@@ -221,7 +221,7 @@ def build_rows(xlsx_path, sheet_name=None):
                 if remainder:
                     fee_label = 'Biaya Admin' if is_debit else 'Bunga Bank'
                     rows.append({
-                        'tanggal': tgl_str, 'keterangan': fee_label, 'kategori': fee_label,
+                        'tanggal': tgl_str, 'keterangan': fee_label, 'kategori': 'Biaya Admin Bank',
                         'debit': -remainder if is_debit else None,
                         'kredit': None if is_debit else remainder,
                         'saldo': saldo, 'subjek': '-', 'objek': self_code,
@@ -233,7 +233,7 @@ def build_rows(xlsx_path, sheet_name=None):
 
         if kategori == 'Penjualan':
             subjek, objek = 'Penjualan', self_code
-        elif kategori in ('Biaya Admin', 'Bunga Bank'):
+        elif kategori == 'Biaya Admin Bank':
             subjek, objek = '-', self_code
 
         rows.append({
