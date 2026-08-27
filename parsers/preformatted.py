@@ -14,6 +14,70 @@ FIELD_KEYS = ['tanggal', 'keterangan', 'kategori', 'debit', 'kredit', 'saldo', '
 HEADER_NAME_MAP = {h.upper(): key for h, key in zip(HEADERS, FIELD_KEYS)}
 SELISIH_NAMES = {'SELISIH', 'SELISIH VS SALDO TERCATAT'}
 
+# --- aturan yang sudah dikonfirmasi lewat feedback -- berlaku untuk semua
+# dokumen "sudah diolah" berikutnya, bukan cuma satu bulan tertentu ---
+
+# nama yang selalu berarti "Modal Masuk" (uang masuk dari pemilik/keluarga,
+# bukan penjualan)
+MODAL_MASUK_NAMES = ('AHMAD RIZAN HENDRA',)
+
+# kata kunci -> (kategori, objek_atau_None). Dicek pada gabungan teks
+# Keterangan + Keterangan Tambahan, tidak case-sensitive, dengan word
+# boundary supaya tidak salah tangkap ("Web" tidak match "Website" dst
+# kalau memang perlu lebih ketat -- di sini cukup longgar karena datanya
+# manual/singkat).
+KEYWORD_RULES = [
+    (r'MADAM', 'Belanja Bahan', 'Madam'),
+    (r'BEANS', 'Belanja Bahan', None),
+    (r'SHOPEE', 'Belanja Bahan', 'Shopee'),
+    (r'SINAR BAHAGIA', 'Belanja Bahan', 'Sinar Bahagia'),
+    (r'KONSUMSI', 'Belanja Operasional', None),
+    (r'\bWEB\b', 'Belanja Operasional', None),
+    (r'UTILITIES', 'Belanja Operasional', None),
+    (r'SPOTIFY', 'Belanja Operasional', None),
+    (r'TELKOM', 'Belanja Operasional', None),
+    (r'MR\s*DIY', None, 'MR DIY'),
+]
+KEYWORD_RULES = [(re.compile(pat, re.I), kat, obj) for pat, kat, obj in KEYWORD_RULES]
+
+KONSUMSI_RE = re.compile(r'KONSUMSI', re.I)
+PENJUALAN_RE = re.compile(r'PENJUALAN', re.I)
+BUNGA_RE = re.compile(r'BUNGA', re.I)
+BIAYA_ADMIN_RE = re.compile(r'BIAYA\s*ADMIN|PAJAK', re.I)
+FLIPTECH_RE = re.compile(r'FLIPTECH', re.I)
+
+
+def _apply_keyword_overrides(keterangan, kategori, objek, catatan):
+    """Returns (keterangan, kategori, objek) after applying every keyword
+    rule confirmed via feedback. Order matters: more specific rules first."""
+    text = f'{keterangan} {catatan}'.upper()
+    ob_upper = (objek or '').strip().upper()
+
+    if ob_upper in MODAL_MASUK_NAMES:
+        return 'Modal Masuk', 'Modal Masuk', objek
+
+    if PENJUALAN_RE.search(kategori) or PENJUALAN_RE.search(keterangan):
+        return 'Penjualan', 'Penjualan', objek
+
+    if BIAYA_ADMIN_RE.search(text):
+        return 'Biaya Admin', 'Biaya Admin', objek
+    if BUNGA_RE.search(text):
+        return 'Bunga Bank', 'Bunga Bank', objek
+
+    new_keterangan = 'Belanja Konsumsi' if KONSUMSI_RE.search(text) else keterangan
+    new_kategori, new_objek = kategori, objek
+    for pattern, kat, obj in KEYWORD_RULES:
+        if pattern.search(text):
+            if kat:
+                new_kategori = kat
+            if obj and (not new_objek or new_objek == '-'):
+                new_objek = obj
+
+    if new_kategori.strip().lower().startswith('belanja') and (not new_objek or new_objek == '-'):
+        new_objek = 'Tenant Lain'
+
+    return new_keterangan, new_kategori, new_objek
+
 
 def _find_columns(ws, max_scan=3):
     for r in range(1, max_scan + 1):
@@ -104,21 +168,57 @@ def build_rows(xlsx_path, sheet_name=None):
         else:
             tgl_str = tanggal if isinstance(tanggal, str) else None
 
-        for p in (subjek, objek):
-            p = str(p).strip()
-            if p and p != '-':
-                party_counter[p] += 1
-
         if selisih_col is not None:
             raw_selisih = row[selisih_col] if selisih_col < len(row) else None
             sv = to_float(raw_selisih)
             if sv and abs(sv) > 0.01:
                 selisih_flags += 1
 
+        # Fliptech selalu dipecah jadi 2 baris: pokok transfer (dibulatkan ke
+        # ribuan terdekat) + selisih kecilnya sebagai Biaya Admin (debit)
+        # atau Bunga Bank (kredit) -- seragam untuk semua transaksi Fliptech.
+        if FLIPTECH_RE.search(keterangan) or FLIPTECH_RE.search(catatan):
+            total = debit if debit is not None else kredit
+            is_debit = debit is not None
+            if total is not None:
+                abs_total = abs(total)
+                main = float((int(abs_total) // 1000) * 1000)
+                remainder = round(abs_total - main, 2)
+                for p in (subjek, objek):
+                    p = str(p).strip()
+                    if p and p != '-':
+                        party_counter[p] += 1
+                rows.append({
+                    'tanggal': tgl_str, 'keterangan': 'Transfer Internal',
+                    'kategori': 'Transaksi Internal',
+                    'debit': -main if is_debit else None,
+                    'kredit': None if is_debit else main,
+                    'saldo': saldo, 'subjek': subjek,
+                    'objek': objek or 'Fliptech',
+                    'catatan': catatan,
+                })
+                if remainder:
+                    fee_label = 'Biaya Admin' if is_debit else 'Bunga Bank'
+                    rows.append({
+                        'tanggal': tgl_str, 'keterangan': fee_label, 'kategori': fee_label,
+                        'debit': -remainder if is_debit else None,
+                        'kredit': None if is_debit else remainder,
+                        'saldo': saldo, 'subjek': '', 'objek': '',
+                        'catatan': f'Bagian dari transaksi Fliptech: {keterangan}',
+                    })
+                continue
+
+        for p in (subjek, objek):
+            p = str(p).strip()
+            if p and p != '-':
+                party_counter[p] += 1
+
+        keterangan, kategori, objek = _apply_keyword_overrides(keterangan, str(kategori).strip(), objek, catatan)
+
         rows.append({
             'tanggal': tgl_str,
             'keterangan': keterangan,
-            'kategori': str(kategori).strip(),
+            'kategori': kategori,
             'debit': debit,
             'kredit': kredit,
             'saldo': saldo,
