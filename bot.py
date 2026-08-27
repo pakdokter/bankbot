@@ -14,7 +14,8 @@ from telegram.ext import (
 from parsers.detect import parse_statement, BANK_LABELS
 from parsers import kasir as kasir_parser
 from parsers import preformatted as preformatted_parser
-from parsers.common import write_xlsx, write_recon_xlsx, build_filename, sheet_title_from_meta
+from parsers.common import write_xlsx, write_recon_xlsx, build_filename, sheet_title_from_meta, split_workbook
+from openpyxl import load_workbook
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -33,7 +34,9 @@ WELCOME = (
     "Kategori Transaksi, Debit, Kredit, Saldo Kumulatif, Subjek Transaksi, "
     "Objek Transaksi, Keterangan Tambahan.\n\n"
     "Upload beberapa rekening lalu ketik /gabung untuk menggabungkan semuanya "
-    "jadi satu file rekonsiliasi (satu sheet per rekening)."
+    "jadi satu file rekonsiliasi (satu sheet per rekening).\n\n"
+    "Kalau upload XLSX yang sheet-nya lebih dari satu (misal hasil /gabung), "
+    "otomatis dipecah lagi jadi file terpisah per sheet."
 )
 
 # In-memory session per chat: list of {'label', 'rows', 'saldo_awal', 'saldo_akhir'}.
@@ -76,11 +79,12 @@ async def handle_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE, doc, tm
     return xlsx_path, caption_lines
 
 
-async def handle_xlsx(update: Update, context: ContextTypes.DEFAULT_TYPE, doc, tmp):
-    src_path = os.path.join(tmp, doc.file_name)
-
-    tg_file = await doc.get_file()
-    await tg_file.download_to_drive(src_path)
+async def handle_xlsx(update: Update, context: ContextTypes.DEFAULT_TYPE, doc, tmp, existing_path=None):
+    src_path = existing_path
+    if src_path is None:
+        src_path = os.path.join(tmp, doc.file_name)
+        tg_file = await doc.get_file()
+        await tg_file.download_to_drive(src_path)
 
     # An uploaded .xlsx could be a cashier report OR a statement that's
     # already in this bot's own 9-column format (a manually reconstructed
@@ -137,10 +141,23 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     with tempfile.TemporaryDirectory() as tmp:
         try:
-            if is_pdf:
-                xlsx_path, caption_lines = await handle_pdf(update, context, doc, tmp)
+            if is_xlsx:
+                # kalau file punya lebih dari 1 sheet, anggap ini permintaan
+                # "pisahkan per sheet" (kebalikan dari /gabung) — bukan satu
+                # statement/kasir tunggal untuk di-parse.
+                probe_path = os.path.join(tmp, doc.file_name)
+                tg_file = await doc.get_file()
+                await tg_file.download_to_drive(probe_path)
+                probe_wb = load_workbook(probe_path, read_only=True)
+                sheet_count = len(probe_wb.sheetnames)
+                probe_wb.close()
+
+                if sheet_count > 1:
+                    await handle_split(update, context, probe_path, tmp, status_msg)
+                    return
+                xlsx_path, caption_lines = await handle_xlsx(update, context, doc, tmp, existing_path=probe_path)
             else:
-                xlsx_path, caption_lines = await handle_xlsx(update, context, doc, tmp)
+                xlsx_path, caption_lines = await handle_pdf(update, context, doc, tmp)
         except (TimedOut, NetworkError):
             logger.exception('Timeout jaringan saat memproses %s', doc.file_name)
             await status_msg.edit_text(
@@ -162,6 +179,17 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await status_msg.edit_text('\n'.join(caption_lines))
         with open(xlsx_path, 'rb') as f:
             await update.message.reply_document(document=f, filename=os.path.basename(xlsx_path))
+
+
+async def handle_split(update: Update, context: ContextTypes.DEFAULT_TYPE, src_path, tmp, status_msg):
+    outputs = split_workbook(src_path, tmp)
+    await status_msg.edit_text(f'File ini punya {len(outputs)} sheet — dipecah jadi {len(outputs)} file terpisah:')
+    for sheet_name, out_path in outputs:
+        with open(out_path, 'rb') as f:
+            await context.bot.send_document(
+                chat_id=update.effective_chat.id, document=f, filename=os.path.basename(out_path),
+                caption=sheet_name,
+            )
 
 
 def _gabung_keyboard(chat_id):
