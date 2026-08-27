@@ -218,7 +218,11 @@ def build_rows(xlsx_path, sheet_name=None):
         catatan = get(row, 'catatan') or ''
 
         if kategori.strip().upper().startswith('SALDO AWAL') or keterangan.strip().upper().startswith('SALDO AWAL'):
-            saldo_awal = saldo if saldo is not None else saldo_awal
+            # beberapa file manual cuma isi Kredit (atau Debit) untuk baris
+            # ini dan biarkan Saldo Kumulatif kosong -- pakai itu sebagai
+            # fallback kalau kolom Saldo-nya sendiri tidak terisi
+            fallback = kredit if kredit is not None else debit
+            saldo_awal = saldo if saldo is not None else (fallback if fallback is not None else saldo_awal)
             continue
 
         if hasattr(tanggal, 'strftime'):
@@ -258,6 +262,23 @@ def build_rows(xlsx_path, sheet_name=None):
     # --- pass 2: terapkan aturan kata kunci + pemecahan Fliptech, sekarang
     # self_code sudah diketahui untuk baris Penjualan/Biaya Admin/Bunga Bank
     rows = []
+    running = saldo_awal
+
+    def _emit(row_dict):
+        """Tambahkan baris ke rows, dan hitung ulang Saldo Kumulatif kalau
+        sumbernya tidak mengisi kolom itu (cuma isi Debit/Kredit). Kalau
+        sumbernya MEMANG mengisi Saldo, itu dipercaya sebagai checkpoint dan
+        running balance disinkronkan ke situ."""
+        nonlocal running
+        if running is not None:
+            delta = (row_dict['kredit'] or 0) + (row_dict['debit'] or 0)
+            running = round(running + delta, 2)
+            if row_dict['saldo'] is None:
+                row_dict['saldo'] = running
+            else:
+                running = row_dict['saldo']
+        rows.append(row_dict)
+
     for r in raw_rows:
         tgl_str, keterangan, kategori = r['tanggal'], r['keterangan'], r['kategori']
         debit, kredit, saldo = r['debit'], r['kredit'], r['saldo']
@@ -270,18 +291,18 @@ def build_rows(xlsx_path, sheet_name=None):
                 abs_total = abs(total)
                 main = float((int(abs_total) // 1000) * 1000)
                 remainder = round(abs_total - main, 2)
-                rows.append({
+                _emit({
                     'tanggal': tgl_str, 'keterangan': 'Transfer Internal',
                     'kategori': 'Transaksi Internal',
                     'debit': -main if is_debit else None,
                     'kredit': None if is_debit else main,
-                    'saldo': saldo, 'subjek': subjek,
+                    'saldo': None, 'subjek': subjek,
                     'objek': objek or 'Fliptech',
                     'catatan': catatan,
                 })
                 if remainder:
                     fee_label = 'Biaya Admin' if is_debit else 'Bunga Bank'
-                    rows.append({
+                    _emit({
                         'tanggal': tgl_str, 'keterangan': fee_label, 'kategori': 'Biaya Admin Bank',
                         'debit': -remainder if is_debit else None,
                         'kredit': None if is_debit else remainder,
@@ -308,7 +329,7 @@ def build_rows(xlsx_path, sheet_name=None):
             else:
                 subjek, objek = 'Kas Kasir', self_code
 
-        rows.append({
+        _emit({
             'tanggal': tgl_str,
             'keterangan': keterangan,
             'kategori': kategori,
