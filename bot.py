@@ -1,6 +1,7 @@
 import logging
 import os
 import tempfile
+from collections import Counter
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ChatAction
@@ -42,9 +43,10 @@ SESSIONS = {}
 SELECTIONS = {}
 
 
-def _session_add(chat_id, label, rows, saldo_awal, saldo_akhir):
+def _session_add(chat_id, label, rows, saldo_awal, saldo_akhir, meta=None):
     SESSIONS.setdefault(chat_id, []).append({
         'label': label, 'rows': rows, 'saldo_awal': saldo_awal, 'saldo_akhir': saldo_akhir,
+        'bulan': (meta or {}).get('bulan', ''), 'tahun': (meta or {}).get('tahun', ''),
     })
 
 
@@ -60,7 +62,7 @@ async def handle_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE, doc, tm
 
     bank, info, xlsx_path, rows, meta = parse_statement(pdf_path, tmp)
     label = sheet_title_from_meta(meta)
-    _session_add(update.effective_chat.id, label, rows, info.get('saldo_awal'), info.get('saldo_akhir'))
+    _session_add(update.effective_chat.id, label, rows, info.get('saldo_awal'), info.get('saldo_akhir'), meta)
 
     caption_lines = [
         f"Bank terdeteksi: {BANK_LABELS.get(bank, bank)}",
@@ -91,7 +93,7 @@ async def handle_xlsx(update: Update, context: ContextTypes.DEFAULT_TYPE, doc, t
         write_xlsx(rows, xlsx_path, saldo_awal=saldo_awal, saldo_akhir=saldo_akhir)
 
         label = sheet_title_from_meta(meta)
-        _session_add(update.effective_chat.id, label, rows, saldo_awal, saldo_akhir)
+        _session_add(update.effective_chat.id, label, rows, saldo_awal, saldo_akhir, meta)
 
         caption_lines = [
             f"Rekening terdeteksi (format sudah diolah): {meta['self_code']}",
@@ -108,7 +110,7 @@ async def handle_xlsx(update: Update, context: ContextTypes.DEFAULT_TYPE, doc, t
     write_xlsx(rows, xlsx_path, saldo_awal=saldo_awal, saldo_akhir=saldo_akhir)
 
     label = sheet_title_from_meta(meta)
-    _session_add(update.effective_chat.id, label, rows, saldo_awal, saldo_akhir)
+    _session_add(update.effective_chat.id, label, rows, saldo_awal, saldo_akhir, meta)
 
     caption_lines = [
         "Kasir Stoa Space (dikonversi ke format seragam)",
@@ -235,8 +237,18 @@ async def gabung_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         await query.answer('Memproses...')
         chosen = [entries[i] for i in sorted(selected)]
+
+        bulan_tahun_counter = Counter(
+            (e['bulan'], e['tahun']) for e in chosen if e.get('bulan') and e.get('tahun')
+        )
+        if bulan_tahun_counter:
+            (bulan, tahun), _ = bulan_tahun_counter.most_common(1)[0]
+            recap_name = f'Rekap {bulan} {tahun}.xlsx'
+        else:
+            recap_name = 'Rekap Gabungan.xlsx'
+
         with tempfile.TemporaryDirectory() as tmp:
-            out_path = os.path.join(tmp, 'Rekonsiliasi Gabungan.xlsx')
+            out_path = os.path.join(tmp, recap_name)
             recon_entries = [{
                 'sheet_title': e['label'], 'rows': e['rows'],
                 'saldo_awal': e['saldo_awal'], 'saldo_akhir': e['saldo_akhir'],
