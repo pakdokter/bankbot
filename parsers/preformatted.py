@@ -97,9 +97,13 @@ def _apply_keyword_overrides(keterangan, kategori, objek, catatan, is_kredit=Fal
     if PENJUALAN_RE.search(kategori) or PENJUALAN_RE.search(keterangan):
         return 'Penjualan', 'Penjualan', objek
 
-    if BIAYA_ADMIN_RE.search(text):
+    # cek juga kategori ASLI dari sumber -- beberapa file manual sudah
+    # menulis "Biaya Admin"/"Pajak Bank"/dst di kolom kategori sendiri
+    # walau keterangannya tidak secara harfiah menyebut kata itu
+    admin_bunga_text = f'{text} {kategori}'.upper()
+    if BIAYA_ADMIN_RE.search(admin_bunga_text):
         return 'Biaya Admin', 'Biaya Admin Bank', objek
-    if BUNGA_RE.search(text):
+    if BUNGA_RE.search(admin_bunga_text):
         return 'Bunga Bank', 'Biaya Admin Bank', objek
 
     if SETORAN_RE.search(text):
@@ -213,7 +217,7 @@ def build_rows(xlsx_path, sheet_name=None):
         objek = get(row, 'objek') or ''
         catatan = get(row, 'catatan') or ''
 
-        if kategori == 'Saldo Awal' or keterangan == 'Saldo Awal':
+        if kategori.strip().upper().startswith('SALDO AWAL') or keterangan.strip().upper().startswith('SALDO AWAL'):
             saldo_awal = saldo if saldo is not None else saldo_awal
             continue
 
