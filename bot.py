@@ -4,6 +4,7 @@ import tempfile
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ChatAction
+from telegram.error import TimedOut, NetworkError
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, CallbackQueryHandler,
     ContextTypes, filters,
@@ -115,6 +116,13 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 xlsx_path, caption_lines = await handle_pdf(update, context, doc, tmp)
             else:
                 xlsx_path, caption_lines = await handle_kasir(update, context, doc, tmp)
+        except (TimedOut, NetworkError):
+            logger.exception('Timeout jaringan saat memproses %s', doc.file_name)
+            await status_msg.edit_text(
+                'Koneksi ke Telegram sempat timeout (biasanya sesaat setelah bot baru redeploy). '
+                'Coba kirim ulang file-nya.'
+            )
+            return
         except ValueError as e:
             await status_msg.edit_text(str(e))
             return
@@ -223,7 +231,15 @@ def main():
     if not BOT_TOKEN:
         raise SystemExit('BOT_TOKEN env var belum diset.')
 
-    app = Application.builder().token(BOT_TOKEN).build()
+    app = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        .read_timeout(60)
+        .write_timeout(60)
+        .connect_timeout(30)
+        .get_updates_read_timeout(60)
+        .build()
+    )
     app.add_handler(CommandHandler('start', start))
     app.add_handler(CommandHandler('gabung', gabung_command))
     app.add_handler(CallbackQueryHandler(gabung_callback))
