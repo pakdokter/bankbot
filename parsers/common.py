@@ -103,6 +103,31 @@ KNOWN_OWNER_ACCOUNTS = {
     '473501000343538',
 }
 
+# Alias pegawai/pemilik yang sudah dikonfirmasi -- dipakai bareng oleh semua
+# parser yang perlu mendeteksi pola "Gaji <Nama> [Bulan]". Objek transaksi
+# selalu ditulis dengan nama kanonik di sini, apa pun varian yang muncul.
+EMPLOYEE_ALIASES = {
+    'LATIFATUL HUSNA': 'Latifatul Husna',
+    'EVA': 'Latifatul Husna',
+    'ROZIYAN HIDAYAT': 'Ahmad Roziyan Hidayat',
+    'OJAN': 'Ahmad Roziyan Hidayat',
+    'AHMAD ROZIYAN HIDAYAT': 'Ahmad Roziyan Hidayat',
+}
+BULAN_PATTERN = 'Januari|Februari|Maret|April|Mei|Juni|Juli|Agustus|September|Oktober|November|Desember'
+GAJI_RE = re.compile(rf'^Gaji\s+(.+?)(?:\s+({BULAN_PATTERN}))?$', re.I)
+
+
+def match_gaji(keterangan):
+    """Returns (canonical_employee_name, month_text_or_None) if keterangan
+    matches the 'Gaji <Name> [Month]' pattern, else None."""
+    m = GAJI_RE.match((keterangan or '').strip())
+    if not m:
+        return None
+    name_raw = m.group(1).strip()
+    canonical = EMPLOYEE_ALIASES.get(name_raw.upper(), name_raw.title())
+    return canonical, (m.group(2).title() if m.group(2) else None)
+
+
 CATEGORIES_REFERENCE = [
     'Saldo Awal',
     'Penjualan',
@@ -110,10 +135,13 @@ CATEGORIES_REFERENCE = [
     'Belanja Konsumsi',
     'Belanja Operasional',
     'Gaji & Tenaga Kerja',
+    'Gaji Pegawai',
+    'Riset dan Pengembangan',
     'Sewa & Utilitas',
     'Cicilan & Utang',
     'Modal & Setoran Pemilik',
     'Transfer Internal (Pindah Rekening)',
+    'Transaksi Internal',
     'Transfer Antar Rekening (Fliptech)',
     'Biaya Admin Bank',
     'Transfer Lainnya',
@@ -266,7 +294,7 @@ def populate_sheet(ws, rows, self_code='', entity_code_map=None, saldo_awal=None
 
     anchor_rows = []
     if saldo_awal is not None:
-        ws.append(['', 'Saldo Awal', 'Saldo Awal Bulan', None, None, saldo_awal, '-', '-', None])
+        ws.append(['', 'Saldo Awal', 'Saldo Awal Bulan', None, saldo_awal, saldo_awal, '-', '-', None])
         anchor_rows.append(ws.max_row)
 
     total_debit, total_kredit = 0.0, 0.0
