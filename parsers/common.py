@@ -144,6 +144,7 @@ CATEGORIES_REFERENCE = [
     'Gaji & Tenaga Kerja',
     'Gaji Pegawai',
     'Riset dan Pengembangan',
+    'Tip/Minus',
     'Sewa & Utilitas',
     'Cicilan & Utang',
     'Modal & Setoran Pemilik',
