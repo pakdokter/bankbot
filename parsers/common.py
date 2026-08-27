@@ -39,6 +39,13 @@ def month_name(month_num):
         return ''
 
 
+def sanitize_sheet_title(title):
+    """Excel sheet names forbid \\ / ? * [ ] : and can't be empty or >31 chars."""
+    title = re.sub(r'[\\/:*?\[\]]', '-', title or '')
+    title = title.strip() or 'Sheet'
+    return title[:31]
+
+
 def build_filename(self_code, bulan, tahun, ext='xlsx'):
     """'BCA-887', 'Januari', '2025' -> 'BCA-887 Januari 2025.xlsx'"""
     parts = [p for p in (self_code or 'Rekening', bulan or '', str(tahun or '')) if p]
@@ -49,7 +56,7 @@ def build_filename(self_code, bulan, tahun, ext='xlsx'):
 
 def sheet_title_from_meta(meta):
     parts = [p for p in (meta.get('self_code') or 'Rekening', meta.get('bulan') or '', str(meta.get('tahun') or '')) if p]
-    return ' '.join(parts).strip()[:31]
+    return sanitize_sheet_title(' '.join(parts).strip())
 
 # Konvensi tanda: Debit = uang KELUAR (disimpan NEGATIF, tampil dalam kurung
 # lewat number_format akuntansi), Kredit = uang MASUK (positif). Ini mengikuti
@@ -391,7 +398,7 @@ def write_recon_xlsx(entries, out_path, include_blank_recon_tab=True):
     wb.remove(wb.active)
     used_titles = set()
     for e in entries:
-        title = (e['sheet_title'] or 'Sheet')[:31]
+        title = sanitize_sheet_title(e['sheet_title'] or 'Sheet')
         base, n = title, 2
         while title in used_titles:
             suffix = f' ({n})'
