@@ -126,10 +126,12 @@ def build_rows(xlsx_path, sheet_name=None):
         idx = cols.get(key)
         return row[idx] if idx is not None and idx < len(row) else None
 
-    rows = []
-    saldo_awal, saldo_akhir = None, None
+    # --- pass 1: baca semua baris mentah + tentukan self_code lebih dulu,
+    # dari nilai Subjek/Objek asli (sebelum override apa pun) --------------
+    raw_rows = []
     party_counter = Counter()
     month_year_counter = Counter()
+    saldo_awal, saldo_akhir = None, None
     selisih_flags = 0
 
     for row in ws.iter_rows(min_row=header_row + 1, values_only=True):
@@ -146,7 +148,7 @@ def build_rows(xlsx_path, sheet_name=None):
             continue
 
         tanggal = get(row, 'tanggal')
-        kategori = get(row, 'kategori') or ''
+        kategori = str(get(row, 'kategori') or '').strip()
         debit = to_float(get(row, 'debit'))
         kredit = to_float(get(row, 'kredit'))
         saldo = to_float(get(row, 'saldo'))
@@ -154,7 +156,7 @@ def build_rows(xlsx_path, sheet_name=None):
         objek = get(row, 'objek') or ''
         catatan = get(row, 'catatan') or ''
 
-        if str(kategori).strip() == 'Saldo Awal' or keterangan == 'Saldo Awal':
+        if kategori == 'Saldo Awal' or keterangan == 'Saldo Awal':
             saldo_awal = saldo if saldo is not None else saldo_awal
             continue
 
@@ -174,9 +176,32 @@ def build_rows(xlsx_path, sheet_name=None):
             if sv and abs(sv) > 0.01:
                 selisih_flags += 1
 
-        # Fliptech selalu dipecah jadi 2 baris: pokok transfer (dibulatkan ke
-        # ribuan terdekat) + selisih kecilnya sebagai Biaya Admin (debit)
-        # atau Bunga Bank (kredit) -- seragam untuk semua transaksi Fliptech.
+        for p in (subjek, objek):
+            p = str(p).strip()
+            if p and p != '-':
+                party_counter[p] += 1
+
+        raw_rows.append({
+            'tanggal': tgl_str, 'keterangan': keterangan, 'kategori': kategori,
+            'debit': debit, 'kredit': kredit, 'saldo': saldo,
+            'subjek': subjek, 'objek': objek, 'catatan': catatan,
+        })
+
+    self_code = party_counter.most_common(1)[0][0] if party_counter else 'Rekening'
+    if month_year_counter:
+        (m, y), _ = month_year_counter.most_common(1)[0]
+        bulan, tahun = month_name(m), y
+    else:
+        bulan, tahun = '', ''
+
+    # --- pass 2: terapkan aturan kata kunci + pemecahan Fliptech, sekarang
+    # self_code sudah diketahui untuk baris Penjualan/Biaya Admin/Bunga Bank
+    rows = []
+    for r in raw_rows:
+        tgl_str, keterangan, kategori = r['tanggal'], r['keterangan'], r['kategori']
+        debit, kredit, saldo = r['debit'], r['kredit'], r['saldo']
+        subjek, objek, catatan = r['subjek'], r['objek'], r['catatan']
+
         if FLIPTECH_RE.search(keterangan) or FLIPTECH_RE.search(catatan):
             total = debit if debit is not None else kredit
             is_debit = debit is not None
@@ -184,10 +209,6 @@ def build_rows(xlsx_path, sheet_name=None):
                 abs_total = abs(total)
                 main = float((int(abs_total) // 1000) * 1000)
                 remainder = round(abs_total - main, 2)
-                for p in (subjek, objek):
-                    p = str(p).strip()
-                    if p and p != '-':
-                        party_counter[p] += 1
                 rows.append({
                     'tanggal': tgl_str, 'keterangan': 'Transfer Internal',
                     'kategori': 'Transaksi Internal',
@@ -203,17 +224,17 @@ def build_rows(xlsx_path, sheet_name=None):
                         'tanggal': tgl_str, 'keterangan': fee_label, 'kategori': fee_label,
                         'debit': -remainder if is_debit else None,
                         'kredit': None if is_debit else remainder,
-                        'saldo': saldo, 'subjek': '', 'objek': '',
+                        'saldo': saldo, 'subjek': '-', 'objek': self_code,
                         'catatan': f'Bagian dari transaksi Fliptech: {keterangan}',
                     })
                 continue
 
-        for p in (subjek, objek):
-            p = str(p).strip()
-            if p and p != '-':
-                party_counter[p] += 1
+        keterangan, kategori, objek = _apply_keyword_overrides(keterangan, kategori, objek, catatan)
 
-        keterangan, kategori, objek = _apply_keyword_overrides(keterangan, str(kategori).strip(), objek, catatan)
+        if kategori == 'Penjualan':
+            subjek, objek = 'Penjualan', self_code
+        elif kategori in ('Biaya Admin', 'Bunga Bank'):
+            subjek, objek = '-', self_code
 
         rows.append({
             'tanggal': tgl_str,
@@ -229,13 +250,6 @@ def build_rows(xlsx_path, sheet_name=None):
 
     if saldo_akhir is None:
         saldo_akhir = rows[-1]['saldo'] if rows else saldo_awal
-
-    self_code = party_counter.most_common(1)[0][0] if party_counter else 'Rekening'
-    if month_year_counter:
-        (m, y), _ = month_year_counter.most_common(1)[0]
-        bulan, tahun = month_name(m), y
-    else:
-        bulan, tahun = '', ''
 
     info = {'selisih_flags': selisih_flags}
     meta = {'self_code': self_code, 'bulan': bulan, 'tahun': tahun}
