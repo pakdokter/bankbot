@@ -92,7 +92,7 @@ FLIPTECH_LABEL = 'Rekening Lain (via Fliptech)'
 # nomor rekening spesifik yang sudah dikonfirmasi user lewat feedback.
 # Tetap belum 100% akurat untuk semua kasus (lihat catatan di bawah).
 
-OWNER_KEYWORDS = ('AHMAD ROZIYAN', 'ROZIYAN HIDAYAT', 'OJAN')
+OWNER_KEYWORDS = ('AHMAD ROZIYAN', 'ROZIYAN HIDAYAT', 'OJAN', 'OWNER')
 DEBT_KEYWORDS = ('CICILAN', 'ANGSURAN', 'BAYAR SB', 'PINJAM', 'UTANG')
 UTILITY_KEYWORDS = ('SEWA', 'LISTRIK', ' PLN', 'AIR STO', 'UTILITAS')
 WALLET_KEYWORDS = ('SHOPEE', 'OVO ', ' OVO', 'GOPAY', 'DANA ', 'TELKOMSEL', 'TOP UP', 'ISI SALDO', 'PULSA', 'BRIVA')
@@ -125,10 +125,12 @@ EMPLOYEE_ALIASES = {
     'EVA': 'Latifatul Husna',
     'ROZIYAN HIDAYAT': 'Ahmad Roziyan Hidayat',
     'OJAN': 'Ahmad Roziyan Hidayat',
+    'KAK OJAN': 'Ahmad Roziyan Hidayat',
+    'OWNER': 'Ahmad Roziyan Hidayat',
     'AHMAD ROZIYAN HIDAYAT': 'Ahmad Roziyan Hidayat',
 }
 BULAN_PATTERN = 'Januari|Februari|Maret|April|Mei|Juni|Juli|Agustus|September|Oktober|November|Desember'
-GAJI_RE = re.compile(rf'^Gaji\s+(.+?)(?:\s+({BULAN_PATTERN}))?$', re.I)
+GAJI_RE = re.compile(rf'^Gaji\s+(.+?)(?:\s+({BULAN_PATTERN})(?:\s+\d{{4}})?)?$', re.I)
 
 
 def match_gaji(keterangan):
