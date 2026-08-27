@@ -8,7 +8,7 @@ import sys
 from collections import Counter
 import openpyxl
 
-from .common import HEADERS, write_xlsx, build_filename, month_name
+from .common import HEADERS, write_xlsx, build_filename, month_name, match_gaji
 
 FIELD_KEYS = ['tanggal', 'keterangan', 'kategori', 'debit', 'kredit', 'saldo', 'subjek', 'objek', 'catatan']
 HEADER_NAME_MAP = {h.upper(): key for h, key in zip(HEADERS, FIELD_KEYS)}
@@ -20,6 +20,12 @@ SELISIH_NAMES = {'SELISIH', 'SELISIH VS SALDO TERCATAT'}
 # nama yang selalu berarti "Modal Masuk" (uang masuk dari pemilik/keluarga,
 # bukan penjualan)
 MODAL_MASUK_NAMES = ('AHMAD RIZAN HENDRA',)
+
+# alias merchant/tenant tunggal (nama panjang -> nama pendek kanonik)
+TENANT_ALIASES = {
+    'PRIMER RAYA': 'Primer',
+    'PRIMER': 'Primer',
+}
 
 # kata kunci -> (kategori, objek_atau_None). Dicek pada gabungan teks
 # Keterangan + Keterangan Tambahan, tidak case-sensitive, dengan word
@@ -37,6 +43,7 @@ KEYWORD_RULES = [
     (r'SPOTIFY', 'Belanja Operasional', None),
     (r'TELKOM', 'Belanja Operasional', None),
     (r'MR\s*DIY', None, 'MR DIY'),
+    (r'PELATIHAN', 'Riset dan Pengembangan', None),
 ]
 KEYWORD_RULES = [(re.compile(pat, re.I), kat, obj) for pat, kat, obj in KEYWORD_RULES]
 
@@ -45,6 +52,8 @@ PENJUALAN_RE = re.compile(r'PENJUALAN', re.I)
 BUNGA_RE = re.compile(r'BUNGA', re.I)
 BIAYA_ADMIN_RE = re.compile(r'BIAYA\s*ADMIN|PAJAK|ADMIN\s*TRANSFER', re.I)
 FLIPTECH_RE = re.compile(r'FLIPTECH', re.I)
+PRIMER_RE = re.compile(r'PRIMER(?:\s*RAYA)?', re.I)
+MODAL_MASUK_KETERANGAN_RE = re.compile(r'^MODAL\s*MASUK$', re.I)
 
 
 def _apply_keyword_overrides(keterangan, kategori, objek, catatan):
@@ -53,8 +62,13 @@ def _apply_keyword_overrides(keterangan, kategori, objek, catatan):
     text = f'{keterangan} {catatan}'.upper()
     ob_upper = (objek or '').strip().upper()
 
-    if ob_upper in MODAL_MASUK_NAMES:
+    if ob_upper in MODAL_MASUK_NAMES or MODAL_MASUK_KETERANGAN_RE.match(keterangan.strip()):
         return 'Modal Masuk', 'Modal & Setoran Pemilik', objek
+
+    gaji = match_gaji(keterangan)
+    if gaji:
+        employee_name, _bulan_gaji = gaji
+        return keterangan, 'Gaji Pegawai', employee_name
 
     if PENJUALAN_RE.search(kategori) or PENJUALAN_RE.search(keterangan):
         return 'Penjualan', 'Penjualan', objek
@@ -63,6 +77,9 @@ def _apply_keyword_overrides(keterangan, kategori, objek, catatan):
         return 'Biaya Admin', 'Biaya Admin Bank', objek
     if BUNGA_RE.search(text):
         return 'Bunga Bank', 'Biaya Admin Bank', objek
+
+    if PRIMER_RE.search(text):
+        return 'Belanja Bahan', 'Belanja Bahan', 'Primer'
 
     new_keterangan = 'Belanja Konsumsi' if KONSUMSI_RE.search(text) else keterangan
     new_kategori, new_objek = kategori, objek
