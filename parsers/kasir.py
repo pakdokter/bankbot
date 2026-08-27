@@ -1,3 +1,4 @@
+import os
 import re
 import sys
 import openpyxl
@@ -83,6 +84,37 @@ def categorize_kasir(kategori_kasir, item_text, person_name=None):
     return 'Belanja Bahan'
 
 
+HEADER_ALIASES = {
+    'TANGGAL': 'tanggal',
+    'KETERANGAN': 'keterangan', 'KETERANGAN / DESKRIPSI': 'keterangan',
+    'KATEGORI': 'kategori_kasir', 'KATEGORI TRANSAKSI': 'kategori_kasir',
+    'DEBIT': 'debit', 'DEBIT (RP)': 'debit',
+    'KREDIT': 'kredit', 'KREDIT (RP)': 'kredit',
+    'SALDO': 'saldo', 'SALDO (RP)': 'saldo', 'SALDO KUMULATIF': 'saldo',
+    'SESI': 'sesi',
+    'FLAG': 'flag', 'KETERANGAN TAMBAHAN': 'flag',
+    'BULAN': 'bulan_text',
+    'BULAN (ANGKA)': 'bulan_angka',
+}
+
+
+def find_header_row(ws, max_scan=5):
+    """Return (header_row_index, {field_key: col_index}). Some kasir exports
+    have a title on row 1 and the real header on row 2; others put the
+    header directly on row 1 — detect whichever it is by looking for a
+    'Tanggal'-like first cell."""
+    for r in range(1, max_scan + 1):
+        row = [ws.cell(row=r, column=c).value for c in range(1, ws.max_column + 1)]
+        cols = {}
+        for i, v in enumerate(row):
+            key = HEADER_ALIASES.get(str(v or '').strip().upper())
+            if key:
+                cols[key] = i
+        if 'tanggal' in cols and 'keterangan' in cols:
+            return r, cols
+    return None, {}
+
+
 def to_float(v):
     if v is None:
         return None
@@ -97,27 +129,64 @@ def build_rows(xlsx_path, sheet_name=None):
     ws = wb[sheet_name] if sheet_name else wb[wb.sheetnames[0]]
 
     title = ws['A1'].value or ''
-    ym = re.search(r'(\d{4})', title)
+    ym = re.search(r'(\d{4})', str(title))
     year = int(ym.group(1)) if ym else None
+
+    header_row, cols = find_header_row(ws)
+    if header_row is None:
+        raise ValueError(
+            'Tidak menemukan kolom "Tanggal" + "Keterangan" di 5 baris pertama — '
+            'format file kasir ini belum dikenali. Kirim contoh strukturnya biar disesuaikan.'
+        )
+    if year is None:
+        m = re.search(r'(20\d{2})', os.path.basename(xlsx_path))
+        year = int(m.group(1)) if m else None
+
+    def get(row, key, default=None):
+        idx = cols.get(key)
+        return row[idx] if idx is not None and idx < len(row) else default
 
     rows = []
     saldo_awal = None
     running = None
     matched_count, tenant_lain_count = 0, 0
+    last_bulan_num = None
 
-    for row in ws.iter_rows(min_row=3, values_only=True):
+    for row in ws.iter_rows(min_row=header_row + 1, values_only=True):
         if row is None or all(c is None for c in row):
             continue
-        bulan, tanggal, sesi, keterangan, kategori_kasir, debit_k, kredit_k, saldo_k, flag = (list(row) + [None] * 9)[:9]
+        keterangan = get(row, 'keterangan')
+        kategori_kasir = get(row, 'kategori_kasir')
         if not keterangan or not kategori_kasir:
             continue
 
-        month = MONTH_MAP.get((bulan or '').strip().upper())
-        tgl_str = f'{int(tanggal):02d}/{month:02d}/{year}' if (month and year and tanggal) else None
+        tanggal = get(row, 'tanggal')
+        bulan_angka = get(row, 'bulan_angka')
+        bulan_text = get(row, 'bulan_text')
+        sesi = get(row, 'sesi')
+        flag = get(row, 'flag')
+        debit_k = to_float(get(row, 'debit'))
+        kredit_k = to_float(get(row, 'kredit'))
+        saldo_k = to_float(get(row, 'saldo'))
 
-        debit_k = to_float(debit_k)
-        kredit_k = to_float(kredit_k)
-        saldo_k = to_float(saldo_k)
+        month = None
+        if bulan_angka:
+            month = int(bulan_angka)
+        elif bulan_text:
+            month = MONTH_MAP.get(str(bulan_text).strip().upper())
+        if month:
+            last_bulan_num = month
+        month = month or last_bulan_num
+
+        tgl_str = None
+        if hasattr(tanggal, 'strftime'):
+            tgl_str = tanggal.strftime('%d/%m/%Y')
+        elif tanggal and month and year:
+            try:
+                tgl_str = f'{int(tanggal):02d}/{month:02d}/{year}'
+            except (TypeError, ValueError):
+                tgl_str = None
+
 
         if kategori_kasir == 'Saldo Awal':
             saldo_awal = debit_k if debit_k is not None else saldo_k
