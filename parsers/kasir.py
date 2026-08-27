@@ -2,7 +2,7 @@ import os
 import re
 import sys
 import openpyxl
-from .common import write_xlsx, month_name, build_filename
+from .common import write_xlsx, month_name, build_filename, match_gaji
 
 MONTH_MAP = {
     'JANUARI': 1, 'FEBRUARI': 2, 'MARET': 3, 'APRIL': 4, 'MEI': 5, 'JUNI': 6,
@@ -37,19 +37,6 @@ TENANT_LAIN = 'Tenant Lain'
 OWNER_NAME_MARKERS = ('OJAN', 'IYAN', 'ROZIYAN')
 GENERIC_MONEY_WORDS = {'LEBIH', 'KURANG', 'MINUS', 'KEMBALI', 'CUSTOMER'}
 
-# Alias pegawai/pemilik yang sudah dikonfirmasi -- beberapa dokumen kasir
-# menyebut orang yang sama dengan nama berbeda. Objek transaksi selalu
-# ditulis dengan nama kanonik di sini, apa pun varian yang muncul di teks.
-EMPLOYEE_ALIASES = {
-    'LATIFATUL HUSNA': 'Latifatul Husna',
-    'EVA': 'Latifatul Husna',
-    'ROZIYAN HIDAYAT': 'Ahmad Roziyan Hidayat',
-    'OJAN': 'Ahmad Roziyan Hidayat',
-    'AHMAD ROZIYAN HIDAYAT': 'Ahmad Roziyan Hidayat',
-}
-
-BULAN_PATTERN = 'Januari|Februari|Maret|April|Mei|Juni|Juli|Agustus|September|Oktober|November|Desember'
-GAJI_RE = re.compile(rf'^Gaji\s+(.+?)(?:\s+({BULAN_PATTERN}))?$', re.I)
 SETORAN_RE = re.compile(r'^Setoran\s+ke\s+(.+)$', re.I)
 
 
@@ -239,12 +226,11 @@ def build_rows(xlsx_path, sheet_name=None):
 
         # --- pola khusus yang sudah dikonfirmasi lewat feedback: berlaku di
         # semua dokumen kasir, bukan cuma satu bulan tertentu ---
-        m_gaji = GAJI_RE.match(keterangan.strip())
-        if m_gaji:
-            name_raw = m_gaji.group(1).strip()
-            employee_name = EMPLOYEE_ALIASES.get(name_raw.upper(), name_raw.title())
+        gaji = match_gaji(keterangan)
+        if gaji:
+            employee_name, gaji_bulan_text = gaji
             toko = employee_name
-            gaji_bulan = m_gaji.group(2).title() if m_gaji.group(2) else month_name(month)
+            gaji_bulan = gaji_bulan_text or month_name(month)
             kategori = f'Gaji Pegawai {gaji_bulan} {year}' if (gaji_bulan and year) else 'Gaji & Tenaga Kerja'
 
         m_setor = SETORAN_RE.match(keterangan.strip())
