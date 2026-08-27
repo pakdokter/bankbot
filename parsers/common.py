@@ -269,7 +269,7 @@ def populate_sheet(ws, rows, self_code='', entity_code_map=None, saldo_awal=None
 
     anchor_rows = []
     if saldo_awal is not None:
-        ws.append(['', 'Saldo Awal', 'Saldo Awal', None, None, saldo_awal, '-', '-', None])
+        ws.append(['', 'Saldo Awal', 'Saldo Awal Bulan', None, None, saldo_awal, '-', '-', None])
         anchor_rows.append(ws.max_row)
 
     total_debit, total_kredit = 0.0, 0.0
