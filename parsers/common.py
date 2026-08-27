@@ -1,6 +1,6 @@
 import re
 from openpyxl import Workbook
-from openpyxl.styles import Font, Alignment
+from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
 HEADERS = [
     'Tanggal', 'Keterangan Transaksi', 'Kategori Transaksi', 'Debit', 'Kredit',
@@ -8,6 +8,22 @@ HEADERS = [
 ]
 
 COL_WIDTHS = [12, 24, 24, 16, 16, 16, 20, 24, 40]
+
+# --- styling: Arial 9 everywhere, Stoa green branding, light highlights ----
+FONT_NAME = 'Arial'
+FONT_SIZE = 9
+
+FONT_DEFAULT = Font(name=FONT_NAME, size=FONT_SIZE)
+FONT_BOLD = Font(name=FONT_NAME, size=FONT_SIZE, bold=True)
+FONT_HEADER = Font(name=FONT_NAME, size=FONT_SIZE, bold=True, color='FFFFFF')
+
+HEADER_FILL = PatternFill(start_color='1F5C22', end_color='1F5C22', fill_type='solid')
+ANCHOR_FILL = PatternFill(start_color='FDF0C7', end_color='FDF0C7', fill_type='solid')   # Saldo Awal/Akhir
+SUMMARY_FILL = PatternFill(start_color='D9EAD9', end_color='D9EAD9', fill_type='solid')  # ringkasan bawah
+ALT_ROW_FILL = PatternFill(start_color='EAF4EA', end_color='EAF4EA', fill_type='solid')  # baris genap
+
+THIN_GREEN = Side(style='thin', color='A9C9AC')
+CELL_BORDER = Border(left=THIN_GREEN, right=THIN_GREEN, top=THIN_GREEN, bottom=THIN_GREEN)
 
 INDO_MONTHS = [
     'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
@@ -40,9 +56,9 @@ def sheet_title_from_meta(meta):
 # label DB/CR asli tiap bank, bukan konvensi buku besar aset (yang membalik
 # Debit/Kredit). Kalau ternyata maunya dibalik, gampang ditukar di satu
 # tempat ini (ROW_BUILDER di bawah).
-DEBIT_NUMBER_FORMAT = '#,##0.00;(#,##0.00)'
-KREDIT_NUMBER_FORMAT = '#,##0.00;(#,##0.00)'
-SALDO_NUMBER_FORMAT = '#,##0.00'
+DEBIT_NUMBER_FORMAT = '"Rp" #,##0.00;("Rp" #,##0.00)'
+KREDIT_NUMBER_FORMAT = '"Rp" #,##0.00'
+SALDO_NUMBER_FORMAT = '"Rp" #,##0.00'
 
 # --- kode singkat rekening Stoa sendiri, untuk kolom Subjek/Objek saat ------
 # transaksinya adalah pemindahan uang ANTAR rekening milik Stoa sendiri
@@ -245,13 +261,19 @@ def populate_sheet(ws, rows, self_code='', entity_code_map=None, saldo_awal=None
 
     ws.append(HEADERS)
     for c in ws[1]:
-        c.font = Font(name='Arial', bold=True)
+        c.font = FONT_HEADER
         c.alignment = Alignment(horizontal='center')
+        c.fill = HEADER_FILL
+        c.border = CELL_BORDER
+    ws.freeze_panes = 'A2'
 
+    anchor_rows = []
     if saldo_awal is not None:
         ws.append(['', 'Saldo Awal', 'Saldo Awal', None, None, saldo_awal, '-', '-', None])
+        anchor_rows.append(ws.max_row)
 
     total_debit, total_kredit = 0.0, 0.0
+    data_start_row = ws.max_row + 1
     for r in rows:
         debit = r.get('debit')
         kredit = r.get('kredit')
@@ -266,6 +288,22 @@ def populate_sheet(ws, rows, self_code='', entity_code_map=None, saldo_awal=None
         ])
 
     data_last_row = ws.max_row
+
+    # baris data: font seragam + border rapi + selang-seling warna baris genap
+    for row in ws.iter_rows(min_row=data_start_row, max_row=data_last_row):
+        is_alt = (row[0].row - data_start_row) % 2 == 1
+        for cell in row:
+            cell.font = FONT_DEFAULT
+            cell.border = CELL_BORDER
+            if is_alt:
+                cell.fill = ALT_ROW_FILL
+
+    for r_idx in anchor_rows:
+        for cell in ws[r_idx]:
+            cell.font = FONT_BOLD
+            cell.fill = ANCHOR_FILL
+            cell.border = CELL_BORDER
+
     ws.append([])
     summary_start = ws.max_row + 1
     ws.append(['', 'Saldo Awal', '', None, None, saldo_awal, '', '', ''])
@@ -275,8 +313,9 @@ def populate_sheet(ws, rows, self_code='', entity_code_map=None, saldo_awal=None
     ws.append(['', 'Saldo Akhir', '', None, None, final_saldo, '', '', ''])
     for row in ws.iter_rows(min_row=summary_start, max_row=ws.max_row):
         for cell in row:
-            if cell.column_letter == 'B':
-                cell.font = Font(name='Arial', bold=True)
+            cell.font = FONT_BOLD
+            cell.fill = SUMMARY_FILL
+            cell.border = CELL_BORDER
 
     for row in ws.iter_rows(min_row=2, max_row=data_last_row, min_col=4, max_col=4):
         for cell in row:
@@ -298,10 +337,7 @@ def populate_sheet(ws, rows, self_code='', entity_code_map=None, saldo_awal=None
 
     for i, w in enumerate(COL_WIDTHS, start=1):
         ws.column_dimensions[chr(64 + i)].width = w
-    for row in ws.iter_rows(min_row=2):
-        for cell in row:
-            if not cell.font.bold:
-                cell.font = Font(name='Arial')
+    ws.row_dimensions[1].height = 18
 
 
 def write_xlsx(rows, out_path, sheet_title='Mutasi', self_code='', entity_code_map=None,
