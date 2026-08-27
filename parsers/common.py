@@ -1,5 +1,6 @@
+import os
 import re
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
 HEADERS = [
@@ -46,12 +47,18 @@ def sanitize_sheet_title(title):
     return title[:31]
 
 
+def sanitize_filename(name, ext='xlsx'):
+    """Sanitizes a string for use as a filename (not a sheet title -- Excel
+    sheet names and OS filenames forbid different character sets)."""
+    name = re.sub(r'[\\/:*?"<>|]', '_', (name or 'Sheet').strip())
+    return f'{name}.{ext}'
+
+
 def build_filename(self_code, bulan, tahun, ext='xlsx'):
     """'BCA-887', 'Januari', '2025' -> 'BCA-887 Januari 2025.xlsx'"""
     parts = [p for p in (self_code or 'Rekening', bulan or '', str(tahun or '')) if p]
     name = ' '.join(parts).strip()
-    name = re.sub(r'[\\/:*?"<>|]', '_', name)
-    return f'{name}.{ext}'
+    return sanitize_filename(name, ext)
 
 
 def sheet_title_from_meta(meta):
@@ -412,3 +419,34 @@ def write_recon_xlsx(entries, out_path, include_blank_recon_tab=True):
         wb.create_sheet(title='Rekonsiliasi')
     wb.save(out_path)
     return out_path
+
+
+def split_workbook(xlsx_path, out_dir):
+    """Splits every sheet of an .xlsx into its own standalone file, named
+    after the sheet (formatting/styles preserved as-is). Returns a list of
+    (sheet_name, output_path). Used by the bot's /pisah-style flow -- the
+    reverse of write_recon_xlsx."""
+    probe = load_workbook(xlsx_path, read_only=True)
+    sheet_names = list(probe.sheetnames)
+    probe.close()
+
+    outputs = []
+    used_names = set()
+    for name in sheet_names:
+        wb = load_workbook(xlsx_path)
+        for other in list(wb.sheetnames):
+            if other != name:
+                del wb[other]
+
+        fname = sanitize_filename(name)
+        base, n = fname, 2
+        while fname in used_names:
+            stem = base.rsplit('.', 1)[0]
+            fname = f'{stem} ({n}).xlsx'
+            n += 1
+        used_names.add(fname)
+
+        out_path = os.path.join(out_dir, fname)
+        wb.save(out_path)
+        outputs.append((name, out_path))
+    return outputs
