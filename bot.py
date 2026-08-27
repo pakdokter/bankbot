@@ -12,6 +12,7 @@ from telegram.ext import (
 
 from parsers.detect import parse_statement, BANK_LABELS
 from parsers import kasir as kasir_parser
+from parsers import preformatted as preformatted_parser
 from parsers.common import write_xlsx, write_recon_xlsx, build_filename, sheet_title_from_meta
 
 logging.basicConfig(
@@ -24,10 +25,10 @@ BOT_TOKEN = os.environ.get('BOT_TOKEN', '')
 
 WELCOME = (
     "Halo! Kirim aku:\n"
-    "- PDF rekening koran (BCA, BRI, atau Bank Jago), atau\n"
-    "- XLSX rekap kasir (format: Bulan, Tanggal, Sesi, Keterangan, Kategori, "
-    "Debit, Kredit, Saldo, Flag)\n\n"
-    "Nanti aku ubah jadi XLSX format seragam: Tanggal, Keterangan Transaksi, "
+    "- PDF rekening koran (BCA, BRI, atau Bank Jago),\n"
+    "- XLSX rekap kasir, atau\n"
+    "- XLSX rekening yang sudah diolah (format 9 kolom bot ini)\n\n"
+    "Nanti aku ubah/rapikan jadi XLSX format seragam: Tanggal, Keterangan Transaksi, "
     "Kategori Transaksi, Debit, Kredit, Saldo Kumulatif, Subjek Transaksi, "
     "Objek Transaksi, Keterangan Tambahan.\n\n"
     "Upload beberapa rekening lalu ketik /gabung untuk menggabungkan semuanya "
@@ -73,11 +74,33 @@ async def handle_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE, doc, tm
     return xlsx_path, caption_lines
 
 
-async def handle_kasir(update: Update, context: ContextTypes.DEFAULT_TYPE, doc, tmp):
+async def handle_xlsx(update: Update, context: ContextTypes.DEFAULT_TYPE, doc, tmp):
     src_path = os.path.join(tmp, doc.file_name)
 
     tg_file = await doc.get_file()
     await tg_file.download_to_drive(src_path)
+
+    # An uploaded .xlsx could be a cashier report OR a statement that's
+    # already in this bot's own 9-column format (a manually reconstructed
+    # old statement, or a previous output the user annotated). Try the
+    # latter first since its header is unambiguous.
+    if preformatted_parser.is_preformatted(src_path):
+        rows, saldo_awal, saldo_akhir, info, meta = preformatted_parser.build_rows(src_path)
+        filename = build_filename(meta['self_code'], meta['bulan'], meta['tahun'])
+        xlsx_path = os.path.join(tmp, filename)
+        write_xlsx(rows, xlsx_path, saldo_awal=saldo_awal, saldo_akhir=saldo_akhir)
+
+        label = sheet_title_from_meta(meta)
+        _session_add(update.effective_chat.id, label, rows, saldo_awal, saldo_akhir)
+
+        caption_lines = [
+            f"Rekening terdeteksi (format sudah diolah): {meta['self_code']}",
+            f"Total baris transaksi: {len(rows)}",
+        ]
+        if info.get('selisih_flags'):
+            caption_lines.append(f"⚠️ {info['selisih_flags']} baris punya selisih != 0 di kolom Selisih, cek manual.")
+        caption_lines.append(f"Tersimpan di sesi sebagai \"{label}\" ({len(SESSIONS[update.effective_chat.id])} rekening total). Ketik /gabung untuk menggabungkan.")
+        return xlsx_path, caption_lines
 
     rows, saldo_awal, saldo_akhir, info, meta = kasir_parser.build_rows(src_path)
     filename = build_filename(meta['self_code'], meta['bulan'], meta['tahun'])
@@ -115,7 +138,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if is_pdf:
                 xlsx_path, caption_lines = await handle_pdf(update, context, doc, tmp)
             else:
-                xlsx_path, caption_lines = await handle_kasir(update, context, doc, tmp)
+                xlsx_path, caption_lines = await handle_xlsx(update, context, doc, tmp)
         except (TimedOut, NetworkError):
             logger.exception('Timeout jaringan saat memproses %s', doc.file_name)
             await status_msg.edit_text(
