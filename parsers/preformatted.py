@@ -26,6 +26,8 @@ TENANT_ALIASES = {
     'PRIMER RAYA': 'Primer',
     'PRIMER': 'Primer',
 }
+OWNER_MARKERS = ('OWNER', 'ROZIYAN HIDAYAT', 'OJAN', 'AHMAD ROZIYAN HIDAYAT')
+GENERIC_UNRESOLVED_CATEGORIES = {'TRANSFER KELUAR', 'PENGELUARAN', 'TRANSFER LAINNYA'}
 
 # kata kunci -> (kategori, objek_atau_None). Dicek pada gabungan teks
 # Keterangan + Keterangan Tambahan, tidak case-sensitive, dengan word
@@ -56,7 +58,7 @@ PRIMER_RE = re.compile(r'PRIMER(?:\s*RAYA)?', re.I)
 MODAL_MASUK_KETERANGAN_RE = re.compile(r'^MODAL\s*MASUK$', re.I)
 
 
-def _apply_keyword_overrides(keterangan, kategori, objek, catatan):
+def _apply_keyword_overrides(keterangan, kategori, objek, catatan, is_kredit=False):
     """Returns (keterangan, kategori, objek) after applying every keyword
     rule confirmed via feedback. Order matters: more specific rules first."""
     text = f'{keterangan} {catatan}'.upper()
@@ -68,6 +70,10 @@ def _apply_keyword_overrides(keterangan, kategori, objek, catatan):
     gaji = match_gaji(keterangan)
     if gaji:
         employee_name, _bulan_gaji = gaji
+        # gaji milik owner yang MASUK (bukan Stoa menggaji dia) sebenarnya
+        # penghasilan luar yang disuntikkan sebagai modal, bukan beban gaji
+        if is_kredit and any(m in employee_name.upper() for m in OWNER_MARKERS):
+            return 'Modal Masuk', 'Modal & Setoran Pemilik', employee_name
         return keterangan, 'Gaji Pegawai', employee_name
 
     if PENJUALAN_RE.search(kategori) or PENJUALAN_RE.search(keterangan):
@@ -89,6 +95,12 @@ def _apply_keyword_overrides(keterangan, kategori, objek, catatan):
                 new_kategori = kat
             if obj and (not new_objek or new_objek == '-'):
                 new_objek = obj
+
+    # kategori generik/tidak jelas yang belum kena aturan spesifik apa pun di
+    # atas -- selama uangnya keluar, anggap sebagai belanja operasional
+    # biasa daripada dibiarkan sebagai label transfer mentah
+    if new_kategori.strip().upper() in GENERIC_UNRESOLVED_CATEGORIES and not is_kredit:
+        new_kategori = 'Belanja Operasional'
 
     if new_kategori.strip().lower().startswith('belanja') and (not new_objek or new_objek == '-'):
         new_objek = 'Tenant Lain'
@@ -246,7 +258,9 @@ def build_rows(xlsx_path, sheet_name=None):
                     })
                 continue
 
-        keterangan, kategori, objek = _apply_keyword_overrides(keterangan, kategori, objek, catatan)
+        keterangan, kategori, objek = _apply_keyword_overrides(
+            keterangan, kategori, objek, catatan, is_kredit=(kredit is not None)
+        )
 
         if kategori == 'Penjualan':
             subjek, objek = 'Penjualan', self_code
