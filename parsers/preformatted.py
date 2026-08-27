@@ -54,7 +54,7 @@ def _apply_keyword_overrides(keterangan, kategori, objek, catatan):
     ob_upper = (objek or '').strip().upper()
 
     if ob_upper in MODAL_MASUK_NAMES:
-        return 'Modal Masuk', 'Modal Masuk', objek
+        return 'Modal Masuk', 'Modal & Setoran Pemilik', objek
 
     if PENJUALAN_RE.search(kategori) or PENJUALAN_RE.search(keterangan):
         return 'Penjualan', 'Penjualan', objek
