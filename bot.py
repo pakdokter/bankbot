@@ -35,6 +35,8 @@ WELCOME = (
     "Objek Transaksi, Keterangan Tambahan.\n\n"
     "Upload beberapa rekening lalu ketik /gabung untuk menggabungkan semuanya "
     "jadi satu file rekonsiliasi (satu sheet per rekening).\n\n"
+    "Ketik /sesi untuk lihat rekening apa saja yang sudah tersimpan, atau "
+    "/reset untuk mengosongkan semua sebelum menggabung (hindari salah gabung).\n\n"
     "Kalau upload XLSX yang sheet-nya lebih dari satu (misal hasil /gabung), "
     "otomatis dipecah lagi jadi file terpisah per sheet."
 )
@@ -198,16 +200,44 @@ def _gabung_keyboard(chat_id):
     rows = []
     for i, e in enumerate(entries):
         mark = '✅' if i in selected else '⬜'
-        rows.append([InlineKeyboardButton(f'{mark} {e["label"]}', callback_data=f'toggle:{i}')])
+        rows.append([
+            InlineKeyboardButton(f'{mark} {e["label"]}', callback_data=f'toggle:{i}'),
+            InlineKeyboardButton('🗑', callback_data=f'remove:{i}'),
+        ])
     rows.append([
         InlineKeyboardButton('✅ Pilih semua', callback_data='select_all'),
-        InlineKeyboardButton('⬜ Kosongkan', callback_data='select_none'),
+        InlineKeyboardButton('⬜ Kosongkan pilihan', callback_data='select_none'),
     ])
     rows.append([
         InlineKeyboardButton('📎 Proses Gabung', callback_data='process'),
-        InlineKeyboardButton('Batal', callback_data='cancel'),
+        InlineKeyboardButton('🧹 Hapus Semua Sesi', callback_data='reset_all'),
     ])
+    rows.append([InlineKeyboardButton('Batal', callback_data='cancel')])
     return InlineKeyboardMarkup(rows)
+
+
+async def sesi_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    entries = SESSIONS.get(chat_id, [])
+    if not entries:
+        await update.message.reply_text('Sesi kosong — belum ada rekening yang diproses.')
+        return
+    lines = [f'{i + 1}. {e["label"]}' for i, e in enumerate(entries)]
+    await update.message.reply_text(
+        f'Ada {len(entries)} rekening tersimpan di sesi ini:\n' + '\n'.join(lines) +
+        '\n\nKetik /gabung untuk menggabungkan, atau /reset untuk mengosongkan semua.'
+    )
+
+
+async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    count = len(SESSIONS.get(chat_id, []))
+    SESSIONS[chat_id] = []
+    SELECTIONS[chat_id] = set()
+    if count:
+        await update.message.reply_text(f'Sesi dikosongkan — {count} rekening yang tersimpan sudah dihapus.')
+    else:
+        await update.message.reply_text('Sesi memang sudah kosong.')
 
 
 async def gabung_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -240,6 +270,35 @@ async def gabung_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             selected.add(idx)
         await query.answer()
         await query.edit_message_reply_markup(reply_markup=_gabung_keyboard(chat_id))
+        return
+
+    if data.startswith('remove:'):
+        idx = int(data.split(':', 1)[1])
+        if 0 <= idx < len(entries):
+            removed = entries.pop(idx)
+            # geser index yang lebih besar dari idx supaya tetap nyambung
+            # ke entri yang sama setelah satu dihapus dari tengah daftar
+            new_selected = set()
+            for s in selected:
+                if s < idx:
+                    new_selected.add(s)
+                elif s > idx:
+                    new_selected.add(s - 1)
+            SELECTIONS[chat_id] = new_selected
+            await query.answer(f'"{removed["label"]}" dihapus dari sesi.')
+        else:
+            await query.answer()
+        if not entries:
+            await query.edit_message_text('Sesi sekarang kosong. Upload rekening baru lalu ketik /gabung lagi.')
+            return
+        await query.edit_message_reply_markup(reply_markup=_gabung_keyboard(chat_id))
+        return
+
+    if data == 'reset_all':
+        SESSIONS[chat_id] = []
+        SELECTIONS[chat_id] = set()
+        await query.answer('Sesi dikosongkan.')
+        await query.edit_message_text('Semua rekening di sesi ini sudah dihapus. Upload ulang lalu ketik /gabung kalau perlu.')
         return
 
     if data == 'select_all':
@@ -305,6 +364,8 @@ def main():
     )
     app.add_handler(CommandHandler('start', start))
     app.add_handler(CommandHandler('gabung', gabung_command))
+    app.add_handler(CommandHandler('sesi', sesi_command))
+    app.add_handler(CommandHandler('reset', reset_command))
     app.add_handler(CallbackQueryHandler(gabung_callback))
     app.add_handler(MessageHandler(filters.Document.PDF | filters.Document.FileExtension('xlsx'), handle_document))
 
