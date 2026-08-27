@@ -38,6 +38,7 @@ OWNER_NAME_MARKERS = ('OJAN', 'IYAN', 'ROZIYAN')
 GENERIC_MONEY_WORDS = {'LEBIH', 'KURANG', 'MINUS', 'KEMBALI', 'CUSTOMER'}
 
 SETORAN_RE = re.compile(r'^Setoran\s+ke\s+(.+)$', re.I)
+SETORAN_TUNAI_RE = re.compile(r'SETORAN\s*TUNAI', re.I)
 
 
 def match_toko(text):
@@ -233,10 +234,18 @@ def build_rows(xlsx_path, sheet_name=None):
             gaji_bulan = gaji_bulan_text or month_name(month)
             kategori = f'Gaji Pegawai {gaji_bulan} {year}' if (gaji_bulan and year) else 'Gaji & Tenaga Kerja'
 
+        # "Setoran ke X" / "Setoran Tunai [CDM] [Bank]" -- pemindahan uang
+        # dari kas kasir ke rekening bank = transfer antar kantong, bukan
+        # pengeluaran/penerimaan biasa.
         m_setor = SETORAN_RE.match(keterangan.strip())
         if m_setor:
             toko = m_setor.group(1).strip()
             kategori = 'Transaksi Internal'
+        elif SETORAN_TUNAI_RE.search(keterangan):
+            kategori = 'Transaksi Internal'
+            m2 = re.search(r'SETORAN\s*TUNAI\s*(?:CDM)?\s*(.*)$', keterangan, re.I)
+            extra = m2.group(1).strip() if m2 else ''
+            toko = extra if extra else 'Bank'
 
         if kategori_kasir == 'Penjualan':
             item_text = 'Penjualan'
