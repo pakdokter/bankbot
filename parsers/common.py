@@ -115,8 +115,7 @@ CATEGORIES_REFERENCE = [
     'Modal & Setoran Pemilik',
     'Transfer Internal (Pindah Rekening)',
     'Transfer Antar Rekening (Fliptech)',
-    'Biaya Admin & Pajak Bank',
-    'Bunga Bank (Pendapatan)',
+    'Biaya Admin Bank',
     'Transfer Lainnya',
     'Lainnya / Perlu Verifikasi',
 ]
@@ -169,10 +168,8 @@ def categorize(keterangan, objek, catatan, debit, kredit):
 
     if ket == 'SALDO AWAL':
         return 'Saldo Awal'
-    if ket in ('BUNGA', 'BUNGA BANK'):
-        return 'Bunga Bank (Pendapatan)'
-    if ket in ('PAJAK BUNGA', 'BIAYA ADMIN', 'BIAYA ADM'):
-        return 'Biaya Admin & Pajak Bank'
+    if ket in ('BUNGA', 'BUNGA BANK', 'PAJAK BUNGA', 'BIAYA ADMIN', 'BIAYA ADM', 'ADMIN TRANSFER'):
+        return 'Biaya Admin Bank'
     if 'FLIPTECH' in text:
         return 'Transfer Antar Rekening (Fliptech)'
     if ' TO ' in (keterangan or '').upper() or 'IBIZ' in text or 'NBMB' in text:
