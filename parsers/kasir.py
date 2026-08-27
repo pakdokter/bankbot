@@ -37,6 +37,21 @@ TENANT_LAIN = 'Tenant Lain'
 OWNER_NAME_MARKERS = ('OJAN', 'IYAN', 'ROZIYAN')
 GENERIC_MONEY_WORDS = {'LEBIH', 'KURANG', 'MINUS', 'KEMBALI', 'CUSTOMER'}
 
+# Alias pegawai/pemilik yang sudah dikonfirmasi -- beberapa dokumen kasir
+# menyebut orang yang sama dengan nama berbeda. Objek transaksi selalu
+# ditulis dengan nama kanonik di sini, apa pun varian yang muncul di teks.
+EMPLOYEE_ALIASES = {
+    'LATIFATUL HUSNA': 'Latifatul Husna',
+    'EVA': 'Latifatul Husna',
+    'ROZIYAN HIDAYAT': 'Ahmad Roziyan Hidayat',
+    'OJAN': 'Ahmad Roziyan Hidayat',
+    'AHMAD ROZIYAN HIDAYAT': 'Ahmad Roziyan Hidayat',
+}
+
+BULAN_PATTERN = 'Januari|Februari|Maret|April|Mei|Juni|Juli|Agustus|September|Oktober|November|Desember'
+GAJI_RE = re.compile(rf'^Gaji\s+(.+?)(?:\s+({BULAN_PATTERN}))?$', re.I)
+SETORAN_RE = re.compile(r'^Setoran\s+ke\s+(.+)$', re.I)
+
 
 def match_toko(text):
     up = (text or '').upper().strip()
@@ -221,6 +236,24 @@ def build_rows(xlsx_path, sheet_name=None):
                 tenant_lain_count += 1
 
         kategori = categorize_kasir(kategori_kasir, item_text, person_name)
+
+        # --- pola khusus yang sudah dikonfirmasi lewat feedback: berlaku di
+        # semua dokumen kasir, bukan cuma satu bulan tertentu ---
+        m_gaji = GAJI_RE.match(keterangan.strip())
+        if m_gaji:
+            name_raw = m_gaji.group(1).strip()
+            employee_name = EMPLOYEE_ALIASES.get(name_raw.upper(), name_raw.title())
+            toko = employee_name
+            gaji_bulan = m_gaji.group(2).title() if m_gaji.group(2) else month_name(month)
+            kategori = f'Gaji Pegawai {gaji_bulan} {year}' if (gaji_bulan and year) else 'Gaji & Tenaga Kerja'
+
+        m_setor = SETORAN_RE.match(keterangan.strip())
+        if m_setor:
+            toko = m_setor.group(1).strip()
+            kategori = 'Transaksi Internal'
+
+        if kategori_kasir == 'Penjualan':
+            item_text = 'Penjualan'
 
         if my_debit is not None:
             subjek_field, objek_field = 'Kasir', toko
