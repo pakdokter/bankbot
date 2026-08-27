@@ -46,6 +46,17 @@ KEYWORD_RULES = [
     (r'TELKOM', 'Belanja Operasional', None),
     (r'MR\s*DIY', None, 'MR DIY'),
     (r'PELATIHAN', 'Riset dan Pengembangan', None),
+    (r'TARIKAN?\s*ATM', 'Belanja Operasional', None),
+    (r'INDOMARET', None, 'Indomaret'),
+    (r'MASUYA', None, 'Masuya'),
+    (r'ANUGERAH', None, 'Anugerah'),
+    (r'AMANAH', 'Belanja Bahan', 'Amanah'),
+    (r'APOTEK\s*SURYA\s*FARMA|SURYA\s*FARMA', None, 'Apotek Surya Farma'),
+    (r'APOTEK\s*YODAN|\bYODAN\b', None, 'Apotek Yodan'),
+    (r'BINTANG\s*PLASTIK', None, 'Bintang Plastik'),
+    (r'FADHILAH', 'Belanja Bahan', 'Fadhilah'),
+    (r'MAK\s*OPIK|MAH\s*OPIK', 'Belanja Bahan', 'Mak Opik'),
+    (r'PASAR\s*PANCOR|\bPASAR\b', 'Belanja Bahan', 'Pasar'),
 ]
 KEYWORD_RULES = [(re.compile(pat, re.I), kat, obj) for pat, kat, obj in KEYWORD_RULES]
 
@@ -56,6 +67,10 @@ BIAYA_ADMIN_RE = re.compile(r'BIAYA\s*ADMIN|PAJAK|ADMIN\s*TRANSFER', re.I)
 FLIPTECH_RE = re.compile(r'FLIPTECH', re.I)
 PRIMER_RE = re.compile(r'PRIMER(?:\s*RAYA)?', re.I)
 MODAL_MASUK_KETERANGAN_RE = re.compile(r'^MODAL\s*MASUK$', re.I)
+KOREKSI_RE = re.compile(r'KOREKSI', re.I)
+# "Setoran Via CDM", "Setoran Tunai", "Setor tunai -> BCA", "Setoran ke BCA", dst
+SETORAN_RE = re.compile(r'SETOR(?:AN)?\s*TUNAI|SETORAN', re.I)
+BANK_NAME_RE = re.compile(r'\b(BCA|BRI|MANDIRI|JAGO|BSI|BNI|CIMB)\b', re.I)
 
 
 def _apply_keyword_overrides(keterangan, kategori, objek, catatan, is_kredit=False):
@@ -66,6 +81,9 @@ def _apply_keyword_overrides(keterangan, kategori, objek, catatan, is_kredit=Fal
 
     if ob_upper in MODAL_MASUK_NAMES or MODAL_MASUK_KETERANGAN_RE.match(keterangan.strip()):
         return 'Modal Masuk', 'Modal & Setoran Pemilik', objek
+
+    if KOREKSI_RE.search(keterangan):
+        return 'Tip/Minus', 'Tip/Minus', objek
 
     gaji = match_gaji(keterangan)
     if gaji:
@@ -83,6 +101,16 @@ def _apply_keyword_overrides(keterangan, kategori, objek, catatan, is_kredit=Fal
         return 'Biaya Admin', 'Biaya Admin Bank', objek
     if BUNGA_RE.search(text):
         return 'Bunga Bank', 'Biaya Admin Bank', objek
+
+    if SETORAN_RE.search(text):
+        # setoran tunai kasir <-> bank = perpindahan antar "kantong" Stoa
+        # sendiri. Kalau nama bank tujuannya kesebut eksplisit, itu jadi
+        # objek (rekening ini yang mengirim); kalau tidak, rekening ini
+        # dianggap sisi penerima (bank), objek jadi self_code -- diselesaikan
+        # di build_rows setelah self_code diketahui.
+        m_bank = BANK_NAME_RE.search(text)
+        target = m_bank.group(1).upper() if m_bank else objek
+        return keterangan, 'Transaksi Internal', target
 
     if PRIMER_RE.search(text):
         return 'Belanja Bahan', 'Belanja Bahan', 'Primer'
@@ -266,6 +294,15 @@ def build_rows(xlsx_path, sheet_name=None):
             subjek, objek = 'Penjualan', self_code
         elif kategori == 'Biaya Admin Bank':
             subjek, objek = '-', self_code
+        elif kategori == 'Transaksi Internal':
+            # dari aturan SETORAN_RE di _apply_keyword_overrides: kalau nama
+            # bank tujuan disebut eksplisit di teks, rekening ini yang
+            # mengirim (objek = bank tujuan); kalau tidak, rekening ini
+            # dianggap sisi bank yang menerima setoran dari kas kasir.
+            if objek and objek not in ('-', ''):
+                subjek = self_code
+            else:
+                subjek, objek = 'Kas Kasir', self_code
 
         rows.append({
             'tanggal': tgl_str,
