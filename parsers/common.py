@@ -117,6 +117,13 @@ KNOWN_OWNER_ACCOUNTS = {
     '473501000343538',
 }
 
+# entitas/subjek pengirim yang selalu berarti modal masuk pemilik, walau
+# bukan si pemilik sendiri (mis. rekening perusahaan/keluarga yang dipakai
+# untuk suntik modal secara rutin)
+KNOWN_MODAL_ENTITIES = (
+    'BUANA MEDIA TEKNOL',
+)
+
 # Alias pegawai/pemilik yang sudah dikonfirmasi -- dipakai bareng oleh semua
 # parser yang perlu mendeteksi pola "Gaji <Nama> [Bulan]". Objek transaksi
 # selalu ditulis dengan nama kanonik di sini, apa pun varian yang muncul.
@@ -159,7 +166,6 @@ CATEGORIES_REFERENCE = [
     'Modal & Setoran Pemilik',
     'Transfer Internal (Pindah Rekening)',
     'Transaksi Internal',
-    'Transfer Antar Rekening (Fliptech)',
     'Biaya Admin Bank',
     'Transfer Lainnya',
     'Lainnya / Perlu Verifikasi',
@@ -188,6 +194,8 @@ def normalize_keterangan(keterangan, debit, kredit):
     ket_upper = ket.upper()
     if ket_upper in UNIVERSAL_KETERANGAN_EXACT:
         return UNIVERSAL_KETERANGAN_EXACT[ket_upper]
+    if 'TELKOMSEL' in ket_upper:
+        return 'Pulsa/Kuota'
     if 'FLIPTECH' in ket_upper:
         return 'Transfer Internal (Pindah Rekening) via Fliptech'
     if ' TO ' in ket_upper or ket_upper.startswith(('TRANSFER', 'TRSF', 'BI-FAST', 'SWITCHING')):
@@ -215,10 +223,15 @@ def categorize(keterangan, objek, catatan, debit, kredit):
         return 'Saldo Awal'
     if ket in ('BUNGA', 'BUNGA BANK', 'PAJAK BUNGA', 'BIAYA ADMIN', 'BIAYA ADM', 'ADMIN TRANSFER'):
         return 'Biaya Admin Bank'
+    if 'BIAYA PEMBAYARAN' in text:
+        return 'Biaya Admin Bank'
     if 'FLIPTECH' in text:
-        return 'Transfer Antar Rekening (Fliptech)'
+        return 'Transaksi Internal'
     if ' TO ' in (keterangan or '').upper() or 'IBIZ' in text or 'NBMB' in text:
         return 'Transfer Internal (Pindah Rekening)'
+
+    if any(k in ob for k in KNOWN_MODAL_ENTITIES):
+        return 'Modal & Setoran Pemilik'
 
     merchant_hit = _merchant_match(objek)
     if merchant_hit:
@@ -238,6 +251,8 @@ def categorize(keterangan, objek, catatan, debit, kredit):
         return 'Modal & Setoran Pemilik'
     if 'TARIK TUNAI' in text or ('SETOR' in text and 'SETORAN' not in ket):
         return 'Modal & Setoran Pemilik'
+    if 'TARIKAN' in text and 'ATM' in text:
+        return 'Belanja Operasional'
 
     if any(k in text for k in DEBT_KEYWORDS):
         return 'Cicilan & Utang'
@@ -249,6 +264,11 @@ def categorize(keterangan, objek, catatan, debit, kredit):
         return 'Belanja Operasional'
     if any(k in ket for k in TRANSFER_TYPES):
         return 'Belanja Operasional' if debit else 'Transfer Lainnya'
+    # kategori generik yang belum kena aturan spesifik apa pun -- selama
+    # uangnya keluar, anggap belanja operasional biasa dulu daripada
+    # dibiarkan "perlu verifikasi" terus
+    if debit:
+        return 'Belanja Operasional'
     return 'Lainnya / Perlu Verifikasi'
 
 
@@ -282,6 +302,9 @@ def apply_universal_fields(rows, self_code='', entity_code_map=None):
         r['keterangan'] = normalize_keterangan(raw_ket, debit, kredit)
 
         counterparty = resolve_party(r.get('objek', ''), self_code, entity_code_map)
+        if not counterparty or counterparty == '-':
+            if r['kategori'].strip().lower().startswith('belanja'):
+                counterparty = 'Tenant Lain'
         if r.get('_is_opening_balance'):
             r['subjek'], r['objek'] = '-', '-'
         elif debit:
