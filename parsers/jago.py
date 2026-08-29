@@ -213,8 +213,15 @@ def build_rows(pdf_path):
             'catatan': '; '.join(note_parts),
         })
 
+    # Saldo Awal/Akhir yang DIPAKAI di output selalu anchor resmi dari
+    # "Total Saldo Personal IDR" di statement -- bukan hasil rekonstruksi
+    # `running` di atas. Selisih kecil (recehan) antara keduanya wajar
+    # terjadi karena bunga di kantong-kantong kecil (GoPay/Stockbit dst)
+    # sering dibulatkan jadi "+0"/"-0" duluan oleh Jago sendiri di PDF-nya,
+    # jadi tidak bisa direkonstruksi presisi. Cuma selisih yang genuinely
+    # besar yang perlu diperingatkan ke user.
     warning = None
-    if saldo_akhir is not None and abs(running - saldo_akhir) > 0.01:
+    if saldo_akhir is not None and abs(running - saldo_akhir) > 5:
         warning = f'Saldo akhir hasil konsolidasi {running:,.2f} != saldo akhir statement {saldo_akhir:,.2f}'
 
     apply_universal_fields(rows, ACCOUNT_CODES['jago'], {})
