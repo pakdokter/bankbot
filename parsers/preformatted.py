@@ -213,9 +213,9 @@ def build_rows(xlsx_path, sheet_name=None):
         debit = to_float(get(row, 'debit'))
         kredit = to_float(get(row, 'kredit'))
         saldo = to_float(get(row, 'saldo'))
-        subjek = get(row, 'subjek') or ''
-        objek = get(row, 'objek') or ''
-        catatan = get(row, 'catatan') or ''
+        subjek = str(get(row, 'subjek') or '')
+        objek = str(get(row, 'objek') or '')
+        catatan = str(get(row, 'catatan') or '')
 
         if kategori.strip().upper().startswith('SALDO AWAL') or keterangan.strip().upper().startswith('SALDO AWAL'):
             # beberapa file manual cuma isi Kredit (atau Debit) untuk baris
