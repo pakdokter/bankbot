@@ -162,6 +162,8 @@ def build_rows(xlsx_path, sheet_name=None):
         kategori_kasir = get(row, 'kategori_kasir')
         if not keterangan or not kategori_kasir:
             continue
+        keterangan = str(keterangan).strip()
+        kategori_kasir = str(kategori_kasir).strip()
 
         tanggal = get(row, 'tanggal')
         bulan_angka = get(row, 'bulan_angka')
