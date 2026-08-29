@@ -11,11 +11,12 @@ MONTH_MAP = {
 
 KNOWN_LABELS = sorted([
     'Isi Saldo Dompet Digital', 'Tarik Uang Kantong', 'Tambah Uang Kantong',
+    'Pindah uang antar Kantong',
     'Transfer Masuk', 'Transfer Keluar', 'Pembayaran QRIS', 'Transaksi POS',
     'Pajak Bunga', 'Bunga',
 ], key=len, reverse=True)
 
-INTERNAL_LABELS = {'Tarik Uang Kantong', 'Tambah Uang Kantong'}
+INTERNAL_LABELS = {'Tarik Uang Kantong', 'Tambah Uang Kantong', 'Pindah uang antar Kantong'}
 
 BANK_KEYWORDS = ('BCA', 'BRI', 'Bank ', 'GoPay', 'OVO', 'DANA', 'Mandiri', 'Pindah uang antar Kantong')
 
@@ -125,6 +126,16 @@ def build_transactions(pdf_path):
         month = MONTH_MAP.get(mon, '01')
         tanggal = f'{dd}/{month}/{yyyy}'
         name_part, label, catatan_line1 = split_label(middle)
+
+        # "Pindah uang antar Kantong" kadang kepotong layout PDF-nya (mis.
+        # "...antar" nyangkut di baris ini, "Kantong"-nya baru muncul di
+        # baris berikut), jadi split_label() di atas bisa gagal mengenali
+        # labelnya. Cek juga gabungan seluruh teks blok ini sebagai jaring
+        # pengaman supaya transfer internal seperti ini tidak lolos jadi
+        # transaksi eksternal.
+        _full_block_text = re.sub(r'\s+', ' ', ' '.join([middle] + b['extra']))
+        if 'PINDAH UANG ANTAR' in _full_block_text.upper() and 'KANTONG' in _full_block_text.upper():
+            label = 'Pindah uang antar Kantong'
 
         time_s = ''
         name_cont = ''
