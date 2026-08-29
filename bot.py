@@ -341,8 +341,15 @@ async def gabung_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 'saldo_awal': e['saldo_awal'], 'saldo_akhir': e['saldo_akhir'],
             } for e in chosen]
             write_recon_xlsx(recon_entries, out_path)
+
+            # sesi otomatis dikosongkan begitu selesai gabung, supaya tidak
+            # kebawa/kegabung lagi tanpa sengaja di /gabung berikutnya
+            SESSIONS[chat_id] = []
+            SELECTIONS[chat_id] = set()
+
             await query.edit_message_text(
-                f'Digabung {len(chosen)} rekening: ' + ', '.join(e['label'] for e in chosen)
+                f'Digabung {len(chosen)} rekening: ' + ', '.join(e['label'] for e in chosen) +
+                '\n\nSesi sudah otomatis dikosongkan.'
             )
             with open(out_path, 'rb') as f:
                 await context.bot.send_document(chat_id=chat_id, document=f, filename=os.path.basename(out_path))
