@@ -157,19 +157,69 @@ CATEGORIES_REFERENCE = [
     'Belanja Bahan',
     'Belanja Konsumsi',
     'Belanja Operasional',
-    'Gaji & Tenaga Kerja',
-    'Gaji Pegawai',
+    'Marketing',
+    'Reparasi',
+    'Belanja Assets',
+    'Gaji Bulan Ini',
     'Riset dan Pengembangan',
-    'Tip/Minus',
-    'Sewa & Utilitas',
-    'Cicilan & Utang',
+    'Tip/Minus/Lebih',
+    'Penarikan',
+    'Penerimaan',
+    'Pembayaran Hutang',
     'Modal & Setoran Pemilik',
-    'Transfer Internal (Pindah Rekening)',
+    'Pindah Rekening Internal',
     'Transaksi Internal',
-    'Biaya Admin Bank',
+    'Biaya Admin & Pajak Bank',
     'Transfer Lainnya',
-    'Lainnya / Perlu Verifikasi',
+    'New Kategori',
 ]
+
+# --- kosakata resmi "bot rekonsiliasi" (reconbot) ---------------------------
+# Kategori di sini HARUS persis sama dengan string yang dicek rumus
+# SUMIF/SUMIFS di reconbot, supaya baris yang dihasilkan bot konversi ini
+# langsung nyambung tanpa perlu di-rename manual saat direkonsiliasi.
+# Kategori "Gaji*" pakai wildcard karena reconbot sendiri menerima variasi
+# label Gaji (Bulan Ini/Accrual/nama bulan spesifik) via jaring pengaman
+# terpisah -- bukan berarti boleh bebas, tapi harus tetap diawali "Gaji ".
+RECON_KNOWN_CATEGORIES = {
+    'Saldo Awal',
+    'Penjualan',
+    'Belanja Bahan',
+    'Belanja Operasional',
+    'Belanja Konsumsi',
+    'Marketing',
+    'Reparasi',
+    'Belanja Assets',
+    'Biaya Admin & Pajak Bank',
+    'Biaya Admin dan Bunga Bank',
+    'Bunga dan Admin Bank',
+    'Tip/Minus/Lebih',
+    'Penarikan',
+    'Penerimaan',
+    'Pembayaran Hutang',
+    'Pindah Rekening Internal',
+    'Pindang Rekening Internal',
+    'Transfer Internal',
+    'Transfer Lainnya',
+    'Transaksi Internal',
+    'Modal & Setoran Pemilik',
+}
+
+
+def enforce_recon_category(kategori):
+    """Terapkan kosakata kategori resmi reconbot. Kategori "Gaji ..." apa
+    pun (dinamis per bulan/pegawai) dianggap dikenal lewat wildcard, sama
+    seperti reconbot sendiri. Kategori lain yang tidak persis cocok dengan
+    RECON_KNOWN_CATEGORIES ditulis sebagai "New Kategori" supaya kelihatan
+    jelas perlu ditambahkan ke reconbot, bukan diam-diam salah kategori."""
+    kat = (kategori or '').strip()
+    if not kat:
+        return 'New Kategori'
+    if kat in RECON_KNOWN_CATEGORIES:
+        return kat
+    if kat.upper().startswith('GAJI'):
+        return kat
+    return 'New Kategori'
 
 # --- keterangan universal ---------------------------------------------------
 # Menormalkan label mentah tiap bank ke kosakata yang sama, supaya baris di
@@ -197,7 +247,7 @@ def normalize_keterangan(keterangan, debit, kredit):
     if 'TELKOMSEL' in ket_upper:
         return 'Pulsa/Kuota'
     if 'FLIPTECH' in ket_upper:
-        return 'Transfer Internal (Pindah Rekening) via Fliptech'
+        return 'Pindah Rekening Internal via Fliptech'
     if ' TO ' in ket_upper or ket_upper.startswith(('TRANSFER', 'TRSF', 'BI-FAST', 'SWITCHING')):
         return 'Transfer Masuk' if kredit else 'Transfer Keluar'
     return ket
@@ -214,26 +264,33 @@ def _merchant_match(objek):
 def categorize(keterangan, objek, catatan, debit, kredit):
     """keterangan is expected to already be the *normalized* universal label
     (see normalize_keterangan) — categorize() is always called after that
-    step in write_xlsx."""
+    step in write_xlsx. Return value is always run through
+    enforce_recon_category() before this function returns, so callers never
+    need to double-check the result against RECON_KNOWN_CATEGORIES."""
     ket = (keterangan or '').upper()
     ob = (objek or '').upper()
     text = f"{keterangan or ''} {objek or ''} {catatan or ''}".upper()
 
+    kat = _categorize_raw(ket, ob, text, debit, kredit)
+    return enforce_recon_category(kat)
+
+
+def _categorize_raw(ket, ob, text, debit, kredit):
     if ket == 'SALDO AWAL':
         return 'Saldo Awal'
     if ket in ('BUNGA', 'BUNGA BANK', 'PAJAK BUNGA', 'BIAYA ADMIN', 'BIAYA ADM', 'ADMIN TRANSFER'):
-        return 'Biaya Admin Bank'
+        return 'Biaya Admin & Pajak Bank'
     if 'BIAYA PEMBAYARAN' in text:
-        return 'Biaya Admin Bank'
+        return 'Biaya Admin & Pajak Bank'
     if 'FLIPTECH' in text:
         return 'Transaksi Internal'
-    if ' TO ' in (keterangan or '').upper() or 'IBIZ' in text or 'NBMB' in text:
-        return 'Transfer Internal (Pindah Rekening)'
+    if ' TO ' in text or 'IBIZ' in text or 'NBMB' in text:
+        return 'Pindah Rekening Internal'
 
     if any(k in ob for k in KNOWN_MODAL_ENTITIES):
         return 'Modal & Setoran Pemilik'
 
-    merchant_hit = _merchant_match(objek)
+    merchant_hit = _merchant_match(ob)
     if merchant_hit:
         return merchant_hit
 
@@ -243,7 +300,7 @@ def categorize(keterangan, objek, catatan, debit, kredit):
         return 'Penjualan'
 
     if any(k in text for k in PAYROLL_KEYWORDS):
-        return 'Gaji & Tenaga Kerja'
+        return 'Gaji Bulan Ini'
 
     if any(acc in ob for acc in KNOWN_OWNER_ACCOUNTS):
         return 'Modal & Setoran Pemilik'
@@ -255,9 +312,9 @@ def categorize(keterangan, objek, catatan, debit, kredit):
         return 'Belanja Operasional'
 
     if any(k in text for k in DEBT_KEYWORDS):
-        return 'Cicilan & Utang'
+        return 'Pembayaran Hutang'
     if any(k in text for k in UTILITY_KEYWORDS):
-        return 'Sewa & Utilitas'
+        return 'Belanja Operasional'
     if any(k in text for k in WALLET_KEYWORDS):
         return 'Belanja Operasional'
     if any(k in text for k in PURCHASE_KEYWORDS):
@@ -266,10 +323,10 @@ def categorize(keterangan, objek, catatan, debit, kredit):
         return 'Belanja Operasional' if debit else 'Transfer Lainnya'
     # kategori generik yang belum kena aturan spesifik apa pun -- selama
     # uangnya keluar, anggap belanja operasional biasa dulu daripada
-    # dibiarkan "perlu verifikasi" terus
+    # dibiarkan tak terkategori terus
     if debit:
         return 'Belanja Operasional'
-    return 'Lainnya / Perlu Verifikasi'
+    return ''
 
 
 def resolve_party(name, self_code, entity_code_map):
@@ -316,6 +373,18 @@ def apply_universal_fields(rows, self_code='', entity_code_map=None):
     return rows
 
 
+def _ensure_no_blank_fields(r, self_code=''):
+    """Jaring pengaman terakhir: Keterangan/Kategori/Subjek/Objek tidak
+    boleh pernah kosong di output, apa pun jalur pemrosesannya sebelumnya."""
+    if not (r.get('keterangan') or '').strip():
+        r['keterangan'] = 'Transaksi Tanpa Keterangan'
+    r['kategori'] = enforce_recon_category(r.get('kategori'))
+    if not (r.get('subjek') or '').strip():
+        r['subjek'] = self_code or '-'
+    if not (r.get('objek') or '').strip():
+        r['objek'] = self_code or '-'
+
+
 def populate_sheet(ws, rows, self_code='', entity_code_map=None, saldo_awal=None, saldo_akhir=None):
     """Fills one worksheet with the standard 9-column layout: header, an
     optional opening-balance row, all transaction rows, and a closing
@@ -323,6 +392,14 @@ def populate_sheet(ws, rows, self_code='', entity_code_map=None, saldo_awal=None
     write_recon_xlsx (multiple accounts, one sheet each)."""
     if rows and 'subjek' not in rows[0]:
         apply_universal_fields(rows, self_code, entity_code_map)
+
+    # jaring pengaman terakhir yang berlaku ke SEMUA jalur (termasuk
+    # kasir.py/preformatted.py yang mengisi subjek/objek/kategori sendiri
+    # dan tidak lewat apply_universal_fields di atas) -- Keterangan,
+    # Kategori, Subjek, Objek tidak boleh pernah kosong, dan Kategori
+    # selalu ditulis pakai kosakata resmi reconbot (atau "New Kategori").
+    for r in rows:
+        _ensure_no_blank_fields(r, self_code)
 
     ws.append(HEADERS)
     for c in ws[1]:
