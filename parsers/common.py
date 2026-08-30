@@ -3,6 +3,18 @@ import re
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
+from . import shared_rules
+
+# --- aturan bersama dengan reconbot (Postgres shared_rules table, lihat
+# shared_rules.py) --------------------------------------------------------
+# Dimuat sekali saat modul ini diimpor. Kalau DATABASE_URL belum diset
+# (atau reconbot belum push apa pun ke tabelnya), semua get(...) di bawah
+# jatuh ke default kosong/`{}` dan bot ini tetap jalan persis seperti
+# sebelum integrasi ini -- tidak ada perilaku yang berubah tanpa data
+# bersama yang benar-benar ada.
+SHARED_CATEGORY_OVERRIDE_RULES = shared_rules.get('category_override_rules', [])
+SHARED_EMPLOYEE_ALIASES = shared_rules.get('employee_aliases', {})
+
 HEADERS = [
     'Tanggal', 'Keterangan Transaksi', 'Kategori Transaksi', 'Debit', 'Kredit',
     'Saldo Kumulatif', 'Subjek Transaksi', 'Objek Transaksi', 'Keterangan Tambahan',
@@ -136,6 +148,12 @@ EMPLOYEE_ALIASES = {
     'OWNER': 'Ahmad Roziyan Hidayat',
     'AHMAD ROZIYAN HIDAYAT': 'Ahmad Roziyan Hidayat',
 }
+# alias yang sudah "diajarkan" ke reconbot ikut dikenali di sini juga
+# (kunci di shared_rules disimpan apa adanya, mis. "Kak Ojan" -> di-upper
+# dulu supaya konsisten dengan cara EMPLOYEE_ALIASES dicek)
+for _name, _canonical in SHARED_EMPLOYEE_ALIASES.items():
+    EMPLOYEE_ALIASES.setdefault(str(_name).strip().upper(), _canonical)
+
 BULAN_PATTERN = 'Januari|Februari|Maret|April|Mei|Juni|Juli|Agustus|September|Oktober|November|Desember'
 GAJI_RE = re.compile(rf'^Gaji\s+(.+?)(?:\s+({BULAN_PATTERN})(?:\s+\d{{4}})?)?$', re.I)
 
@@ -261,6 +279,30 @@ def _merchant_match(objek):
     return None
 
 
+def _shared_rule_match(text, debit, kredit):
+    """Cocokkan aturan dari shared_rules (yang sudah "diajarkan" ke
+    reconbot) terhadap gabungan teks Keterangan+Objek+Catatan. Catatan:
+    kunci "sheet_contains" di aturan reconbot (scoping ke rekening
+    tertentu, mis. khusus Jago) diabaikan di sini karena categorize() tidak
+    tahu rekening sumbernya -- keterbatasan yang disengaja, bukan bug."""
+    text_upper = text.upper()
+    for rule in SHARED_CATEGORY_OVERRIDE_RULES:
+        direction = rule.get('direction')
+        if direction == 'keluar' and not debit:
+            continue
+        if direction == 'masuk' and not kredit:
+            continue
+        all_kw = rule.get('all')
+        any_kw = rule.get('any')
+        if all_kw:
+            if all(str(kw).upper() in text_upper for kw in all_kw):
+                return rule.get('category')
+        elif any_kw:
+            if any(str(kw).upper() in text_upper for kw in any_kw):
+                return rule.get('category')
+    return None
+
+
 def categorize(keterangan, objek, catatan, debit, kredit):
     """keterangan is expected to already be the *normalized* universal label
     (see normalize_keterangan) — categorize() is always called after that
@@ -289,6 +331,10 @@ def _categorize_raw(ket, ob, text, debit, kredit):
 
     if any(k in ob for k in KNOWN_MODAL_ENTITIES):
         return 'Modal & Setoran Pemilik'
+
+    shared_hit = _shared_rule_match(text, debit, kredit)
+    if shared_hit:
+        return shared_hit
 
     merchant_hit = _merchant_match(ob)
     if merchant_hit:
