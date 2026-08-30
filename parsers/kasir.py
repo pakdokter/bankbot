@@ -77,13 +77,15 @@ def categorize_kasir(kategori_kasir, item_text, person_name=None):
     if kategori_kasir == 'Penarikan':
         if person_name and any(m in person_name.upper() for m in OWNER_NAME_MARKERS):
             return 'Modal & Setoran Pemilik'
-        return 'Gaji & Tenaga Kerja'
-    if kategori_kasir in ('Penerimaan', 'Koreksi'):
-        return 'Lainnya / Perlu Verifikasi'
+        return 'Penarikan'
+    if kategori_kasir == 'Penerimaan':
+        return 'Penerimaan'
+    if kategori_kasir == 'Koreksi':
+        return 'Tip/Minus/Lebih'
     if any(k in it for k in ('LAUNDRY', 'PARKIR', 'TISU', 'OJEK', 'ONGKIR', 'LAP ')):
         return 'Belanja Operasional'
     if 'LISTRIK' in it:
-        return 'Sewa & Utilitas'
+        return 'Belanja Operasional'
     return 'Belanja Bahan'
 
 
