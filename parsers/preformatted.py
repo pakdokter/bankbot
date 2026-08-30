@@ -83,7 +83,7 @@ def _apply_keyword_overrides(keterangan, kategori, objek, catatan, is_kredit=Fal
         return 'Modal Masuk', 'Modal & Setoran Pemilik', objek
 
     if KOREKSI_RE.search(keterangan):
-        return 'Tip/Minus', 'Tip/Minus', objek
+        return 'Tip/Minus', 'Tip/Minus/Lebih', objek
 
     gaji = match_gaji(keterangan)
     if gaji:
@@ -102,9 +102,9 @@ def _apply_keyword_overrides(keterangan, kategori, objek, catatan, is_kredit=Fal
     # walau keterangannya tidak secara harfiah menyebut kata itu
     admin_bunga_text = f'{text} {kategori}'.upper()
     if BIAYA_ADMIN_RE.search(admin_bunga_text):
-        return 'Biaya Admin', 'Biaya Admin Bank', objek
+        return 'Biaya Admin', 'Biaya Admin & Pajak Bank', objek
     if BUNGA_RE.search(admin_bunga_text):
-        return 'Bunga Bank', 'Biaya Admin Bank', objek
+        return 'Bunga Bank', 'Biaya Admin & Pajak Bank', objek
 
     if SETORAN_RE.search(text):
         # setoran tunai kasir <-> bank = perpindahan antar "kantong" Stoa
@@ -303,7 +303,7 @@ def build_rows(xlsx_path, sheet_name=None):
                 if remainder:
                     fee_label = 'Biaya Admin' if is_debit else 'Bunga Bank'
                     _emit({
-                        'tanggal': tgl_str, 'keterangan': fee_label, 'kategori': 'Biaya Admin Bank',
+                        'tanggal': tgl_str, 'keterangan': fee_label, 'kategori': 'Biaya Admin & Pajak Bank',
                         'debit': -remainder if is_debit else None,
                         'kredit': None if is_debit else remainder,
                         'saldo': saldo, 'subjek': '-', 'objek': self_code,
@@ -317,7 +317,7 @@ def build_rows(xlsx_path, sheet_name=None):
 
         if kategori == 'Penjualan':
             subjek, objek = 'Penjualan', self_code
-        elif kategori == 'Biaya Admin Bank':
+        elif kategori == 'Biaya Admin & Pajak Bank':
             subjek, objek = '-', self_code
         elif kategori == 'Transaksi Internal':
             # dari aturan SETORAN_RE di _apply_keyword_overrides: kalau nama
