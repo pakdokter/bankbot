@@ -33,8 +33,10 @@ WELCOME = (
     "Nanti aku ubah/rapikan jadi XLSX format seragam: Tanggal, Keterangan Transaksi, "
     "Kategori Transaksi, Debit, Kredit, Saldo Kumulatif, Subjek Transaksi, "
     "Objek Transaksi, Keterangan Tambahan.\n\n"
-    "Upload beberapa rekening lalu ketik /gabung untuk menggabungkan semuanya "
-    "jadi satu file rekonsiliasi (satu sheet per rekening).\n\n"
+    "Ada 2 cara gabung beberapa rekening jadi satu file rekonsiliasi:\n"
+    "1. Upload dulu semua rekening, baru ketik /gabung untuk pilih mana saja yang mau digabung.\n"
+    "2. Ketik /gabung dulu, upload semua file, lalu ketik /selesai — langsung digabung semua "
+    "tanpa perlu pilih manual.\n\n"
     "Ketik /sesi untuk lihat rekening apa saja yang sudah tersimpan, atau "
     "/reset untuk mengosongkan semua sebelum menggabung (hindari salah gabung).\n\n"
     "Kalau upload XLSX yang sheet-nya lebih dari satu (misal hasil /gabung), "
@@ -245,7 +247,11 @@ async def gabung_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     entries = SESSIONS.get(chat_id, [])
     if not entries:
         await update.message.reply_text(
-            'Belum ada rekening yang diproses di sesi ini. Upload dulu PDF/XLSX-nya, baru ketik /gabung.'
+            'Mode gabung aktif. Upload sekarang semua PDF/XLSX rekening yang mau digabung '
+            '(satu-satu juga boleh), lalu ketik /selesai kalau sudah — nanti langsung digabung '
+            'semua tanpa perlu pilih manual lagi.\n\n'
+            '(Atau kalau berubah pikiran, upload dulu semuanya baru ketik /gabung lagi nanti '
+            'untuk pilih rekening mana saja yang mau digabung.)'
         )
         return
     SELECTIONS[chat_id] = set(range(len(entries)))  # default: semua terpilih
@@ -253,6 +259,53 @@ async def gabung_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'Pilih rekening yang mau digabung jadi satu file rekonsiliasi (satu sheet per rekening):',
         reply_markup=_gabung_keyboard(chat_id),
     )
+
+
+async def selesai_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    entries = SESSIONS.get(chat_id, [])
+    if not entries:
+        await update.message.reply_text(
+            'Belum ada rekening yang diupload di sesi ini. Upload dulu PDF/XLSX-nya, baru ketik /selesai.'
+        )
+        return
+    status_msg = await update.message.reply_text(f'Memproses gabungan {len(entries)} rekening...')
+    await _merge_and_deliver(context, chat_id, list(entries), status_msg.edit_text)
+
+
+async def _merge_and_deliver(context, chat_id, chosen, edit_message):
+    """chosen: daftar entri sesi yang mau digabung. edit_message: async
+    callable(text) buat lapor status (bisa dari pesan command atau dari
+    callback query). Dipakai bareng oleh tombol "Proses Gabung" di /gabung
+    dan oleh command /selesai."""
+    bulan_tahun_counter = Counter(
+        (e['bulan'], e['tahun']) for e in chosen if e.get('bulan') and e.get('tahun')
+    )
+    if bulan_tahun_counter:
+        (bulan, tahun), _ = bulan_tahun_counter.most_common(1)[0]
+        recap_name = f'Rekap {bulan} {tahun}.xlsx'
+    else:
+        recap_name = 'Rekap Gabungan.xlsx'
+
+    with tempfile.TemporaryDirectory() as tmp:
+        out_path = os.path.join(tmp, recap_name)
+        recon_entries = [{
+            'sheet_title': e['label'], 'rows': e['rows'],
+            'saldo_awal': e['saldo_awal'], 'saldo_akhir': e['saldo_akhir'],
+        } for e in chosen]
+        write_recon_xlsx(recon_entries, out_path)
+
+        # sesi otomatis dikosongkan begitu selesai gabung, supaya tidak
+        # kebawa/kegabung lagi tanpa sengaja di /gabung berikutnya
+        SESSIONS[chat_id] = []
+        SELECTIONS[chat_id] = set()
+
+        await edit_message(
+            f'Digabung {len(chosen)} rekening: ' + ', '.join(e['label'] for e in chosen) +
+            '\n\nSesi sudah otomatis dikosongkan.'
+        )
+        with open(out_path, 'rb') as f:
+            await context.bot.send_document(chat_id=chat_id, document=f, filename=os.path.basename(out_path))
 
 
 async def gabung_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -324,35 +377,7 @@ async def gabung_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         await query.answer('Memproses...')
         chosen = [entries[i] for i in sorted(selected)]
-
-        bulan_tahun_counter = Counter(
-            (e['bulan'], e['tahun']) for e in chosen if e.get('bulan') and e.get('tahun')
-        )
-        if bulan_tahun_counter:
-            (bulan, tahun), _ = bulan_tahun_counter.most_common(1)[0]
-            recap_name = f'Rekap {bulan} {tahun}.xlsx'
-        else:
-            recap_name = 'Rekap Gabungan.xlsx'
-
-        with tempfile.TemporaryDirectory() as tmp:
-            out_path = os.path.join(tmp, recap_name)
-            recon_entries = [{
-                'sheet_title': e['label'], 'rows': e['rows'],
-                'saldo_awal': e['saldo_awal'], 'saldo_akhir': e['saldo_akhir'],
-            } for e in chosen]
-            write_recon_xlsx(recon_entries, out_path)
-
-            # sesi otomatis dikosongkan begitu selesai gabung, supaya tidak
-            # kebawa/kegabung lagi tanpa sengaja di /gabung berikutnya
-            SESSIONS[chat_id] = []
-            SELECTIONS[chat_id] = set()
-
-            await query.edit_message_text(
-                f'Digabung {len(chosen)} rekening: ' + ', '.join(e['label'] for e in chosen) +
-                '\n\nSesi sudah otomatis dikosongkan.'
-            )
-            with open(out_path, 'rb') as f:
-                await context.bot.send_document(chat_id=chat_id, document=f, filename=os.path.basename(out_path))
+        await _merge_and_deliver(context, chat_id, chosen, query.edit_message_text)
         return
 
 
@@ -371,6 +396,7 @@ def main():
     )
     app.add_handler(CommandHandler('start', start))
     app.add_handler(CommandHandler('gabung', gabung_command))
+    app.add_handler(CommandHandler('selesai', selesai_command))
     app.add_handler(CommandHandler('sesi', sesi_command))
     app.add_handler(CommandHandler('reset', reset_command))
     app.add_handler(CallbackQueryHandler(gabung_callback))
