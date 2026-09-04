@@ -33,12 +33,18 @@ KNOWN_TOKO = {
     'NIDAUL JIHAD': 'Nidaul Jihad',
 }
 TENANT_LAIN = 'Tenant Lain'
+# self_code resmi buku kasir/kas buku -- BUKAN "Kasir". Samakan dengan
+# yang sudah dipakai di parser lain (preformatted.py mendeteksi ini
+# otomatis dari data; di sini kita set eksplisit karena kasir.py memang
+# selalu satu rekening kasir per file/sheet).
+KASIR_SELF_CODE = 'Kas/Buku'
 
 OWNER_NAME_MARKERS = ('OJAN', 'IYAN', 'ROZIYAN')
 GENERIC_MONEY_WORDS = {'LEBIH', 'KURANG', 'MINUS', 'KEMBALI', 'CUSTOMER'}
 
 SETORAN_RE = re.compile(r'^Setoran\s+ke\s+(.+)$', re.I)
-SETORAN_TUNAI_RE = re.compile(r'SETORAN\s*TUNAI', re.I)
+SETORAN_TUNAI_RE = re.compile(r'SETOR(?:AN)?\s*TUNAI', re.I)
+BANK_TRANSFER_RE = re.compile(r'(?:DARI|KE)\s+BANK\s+(.+)$', re.I)
 
 
 def match_toko(text):
@@ -72,16 +78,21 @@ def split_store_item(desc):
 
 def categorize_kasir(kategori_kasir, item_text, person_name=None):
     it = (item_text or '').upper()
-    if kategori_kasir == 'Penjualan':
+    kk = (kategori_kasir or '').strip().upper()
+    if kk.startswith('PENJUALAN'):
         return 'Penjualan'
-    if kategori_kasir == 'Penarikan':
+    if kk == 'REFUND':
+        return 'Penjualan'
+    if kk == 'PENARIKAN':
         if person_name and any(m in person_name.upper() for m in OWNER_NAME_MARKERS):
             return 'Modal & Setoran Pemilik'
         return 'Penarikan'
-    if kategori_kasir == 'Penerimaan':
+    if kk == 'PENERIMAAN':
         return 'Penerimaan'
-    if kategori_kasir == 'Koreksi':
+    if kk == 'KOREKSI':
         return 'Tip/Minus/Lebih'
+    if any(k in it for k in ('PERBAIKI', 'REPARASI', 'SERVIS', 'SERVICE')):
+        return 'Reparasi'
     if any(k in it for k in ('LAUNDRY', 'PARKIR', 'TISU', 'OJEK', 'ONGKIR', 'LAP ')):
         return 'Belanja Operasional'
     if 'LISTRIK' in it:
@@ -90,7 +101,7 @@ def categorize_kasir(kategori_kasir, item_text, person_name=None):
 
 
 HEADER_ALIASES = {
-    'TANGGAL': 'tanggal',
+    'TANGGAL': 'tanggal', 'TGL': 'tanggal',
     'KETERANGAN': 'keterangan', 'KETERANGAN / DESKRIPSI': 'keterangan',
     'KATEGORI': 'kategori_kasir', 'KATEGORI TRANSAKSI': 'kategori_kasir',
     'DEBIT': 'debit', 'DEBIT (RP)': 'debit',
@@ -103,6 +114,39 @@ HEADER_ALIASES = {
 }
 
 
+def _match_header_cell(raw_value):
+    """Cocokkan satu sel header ke field key kanonik. Exact match dulu
+    (HEADER_ALIASES), baru fallback berbasis kata kunci -- soalnya di
+    lapangan header suka ada variasi (emoji flag di depan, gabungan dua
+    nama kolom pakai "/", dst) yang tidak akan pernah persis sama."""
+    v = str(raw_value or '').strip().upper()
+    if not v:
+        return None
+    if v in HEADER_ALIASES:
+        return HEADER_ALIASES[v]
+    if v == 'TGL' or v.startswith('TANGGAL'):
+        return 'tanggal'
+    if v == 'SESI':
+        return 'sesi'
+    if 'BULAN' in v and 'ANGKA' in v:
+        return 'bulan_angka'
+    if v == 'BULAN':
+        return 'bulan_text'
+    if 'KATEGORI' in v:
+        return 'kategori_kasir'
+    if 'FLAG' in v or 'CATATAN' in v:
+        return 'flag'
+    if 'KETERANGAN' in v and 'TAMBAHAN' not in v:
+        return 'keterangan'
+    if v.startswith('DEBIT'):
+        return 'debit'
+    if v.startswith('KREDIT'):
+        return 'kredit'
+    if v.startswith('SALDO'):
+        return 'saldo'
+    return None
+
+
 def find_header_row(ws, max_scan=5):
     """Return (header_row_index, {field_key: col_index}). Some kasir exports
     have a title on row 1 and the real header on row 2; others put the
@@ -112,8 +156,8 @@ def find_header_row(ws, max_scan=5):
         row = [ws.cell(row=r, column=c).value for c in range(1, ws.max_column + 1)]
         cols = {}
         for i, v in enumerate(row):
-            key = HEADER_ALIASES.get(str(v or '').strip().upper())
-            if key:
+            key = _match_header_cell(v)
+            if key and key not in cols:
                 cols[key] = i
         if 'tanggal' in cols and 'keterangan' in cols:
             return r, cols
@@ -147,6 +191,16 @@ def build_rows(xlsx_path, sheet_name=None):
         m = re.search(r'(20\d{2})', os.path.basename(xlsx_path))
         year = int(m.group(1)) if m else None
 
+    # Sebagian format kasir sama sekali tidak punya kolom Bulan/Bulan (Angka)
+    # per baris (mis. satu file per tahun dengan satu sheet per bulan) --
+    # kalau begitu, nama bulan diambil dari judul sheet (baris 1) atau dari
+    # nama tab Excel-nya sendiri (mis. sheet "Januari").
+    title_month_fallback = None
+    for name, num in MONTH_MAP.items():
+        if name in str(title).upper() or name == str(ws.title or '').strip().upper():
+            title_month_fallback = num
+            break
+
     def get(row, key, default=None):
         idx = cols.get(key)
         return row[idx] if idx is not None and idx < len(row) else default
@@ -155,7 +209,7 @@ def build_rows(xlsx_path, sheet_name=None):
     saldo_awal = None
     running = None
     matched_count, tenant_lain_count = 0, 0
-    last_bulan_num = None
+    last_bulan_num = title_month_fallback
 
     for row in ws.iter_rows(min_row=header_row + 1, values_only=True):
         if row is None or all(c is None for c in row):
@@ -247,25 +301,33 @@ def build_rows(xlsx_path, sheet_name=None):
             kategori = 'Transaksi Internal'
         elif SETORAN_TUNAI_RE.search(keterangan):
             kategori = 'Transaksi Internal'
-            m2 = re.search(r'SETORAN\s*TUNAI\s*(?:CDM)?\s*(.*)$', keterangan, re.I)
+            m2 = re.search(r'SETOR(?:AN)?\s*TUNAI\s*(?:CDM)?\s*(.*)$', keterangan, re.I)
             extra = m2.group(1).strip() if m2 else ''
             toko = extra if extra else 'Bank'
+        elif BANK_TRANSFER_RE.search(keterangan):
+            # "Dari Bank Biru" / "Ke Bank Biru" -- uang pindah kasir <-> bank
+            m_bank = BANK_TRANSFER_RE.search(keterangan)
+            item_text = 'Setor Tunai'
+            kategori = 'Transaksi Internal'
+            toko = f'Bank {m_bank.group(1).strip()}'
 
-        if kategori_kasir == 'Penjualan':
+        if (kategori_kasir or '').upper().startswith('PENJUALAN'):
             item_text = 'Penjualan'
+        if (kategori_kasir or '').upper() == 'REFUND':
+            item_text = 'Refund'
 
         if my_debit is not None:
-            subjek_field, objek_field = 'Kasir', toko
+            subjek_field, objek_field = KASIR_SELF_CODE, toko
         else:
             if person_name:
                 src = person_name
-            elif kategori_kasir == 'Penjualan':
+            elif (kategori_kasir or '').upper().startswith('PENJUALAN'):
                 src = 'Penjualan'
             elif kategori_kasir in ('Penerimaan', 'Koreksi'):
                 src = '-'
             else:
                 src = toko
-            subjek_field, objek_field = src, 'Kasir'
+            subjek_field, objek_field = src, KASIR_SELF_CODE
 
         catatan_parts = []
         if flag:
@@ -273,10 +335,14 @@ def build_rows(xlsx_path, sheet_name=None):
         if sesi:
             catatan_parts.append(f'Sesi: {sesi}')
 
-        if running is not None:
-            running = round(running + (my_kredit or 0) + (my_debit or 0), 2)
-        elif saldo_k is not None:
+        if saldo_k is not None:
+            # kolom Saldo sumber sudah tercatat rapi per baris di file ini --
+            # percaya sebagai checkpoint dan sinkronkan ulang running balance
+            # ke situ, supaya satu baris yang salah baca tidak merembet
+            # merusak semua baris sesudahnya di bulan itu.
             running = saldo_k
+        elif running is not None:
+            running = round(running + (my_kredit or 0) + (my_debit or 0), 2)
 
         rows.append({
             'tanggal': tgl_str,
@@ -300,7 +366,7 @@ def build_rows(xlsx_path, sheet_name=None):
     if rows and rows[0]['tanggal']:
         d, m, y = rows[0]['tanggal'].split('/')
         bulan, tahun = month_name(m), y
-    meta = {'self_code': 'Kasir', 'bulan': bulan, 'tahun': tahun}
+    meta = {'self_code': KASIR_SELF_CODE, 'bulan': bulan, 'tahun': tahun}
     return rows, saldo_awal, saldo_akhir, info, meta
 
 
