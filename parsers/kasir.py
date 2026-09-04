@@ -312,7 +312,7 @@ def build_rows(xlsx_path, sheet_name=None):
             item_text = 'Refund'
 
         if my_debit is not None:
-            subjek_field, objek_field = 'Kasir', toko
+            subjek_field, objek_field = 'Kas/Buku', toko
         else:
             if person_name:
                 src = person_name
@@ -322,7 +322,7 @@ def build_rows(xlsx_path, sheet_name=None):
                 src = '-'
             else:
                 src = toko
-            subjek_field, objek_field = src, 'Kasir'
+            subjek_field, objek_field = src, 'Kas/Buku'
 
         catatan_parts = []
         if flag:
@@ -361,7 +361,7 @@ def build_rows(xlsx_path, sheet_name=None):
     if rows and rows[0]['tanggal']:
         d, m, y = rows[0]['tanggal'].split('/')
         bulan, tahun = month_name(m), y
-    meta = {'self_code': 'Kasir', 'bulan': bulan, 'tahun': tahun}
+    meta = {'self_code': 'Kas-Buku', 'bulan': bulan, 'tahun': tahun}
     return rows, saldo_awal, saldo_akhir, info, meta
 
 
