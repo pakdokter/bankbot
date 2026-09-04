@@ -121,7 +121,7 @@ async def handle_xlsx(update: Update, context: ContextTypes.DEFAULT_TYPE, doc, t
     _session_add(update.effective_chat.id, label, rows, saldo_awal, saldo_akhir, meta)
 
     caption_lines = [
-        "Kasir Stoa Space (dikonversi ke format seragam)",
+        "Kas Buku Stoa Space (dikonversi ke format seragam)",
         f"Total baris transaksi: {len(rows)}",
         f"Toko dikenali: {info['toko_dikenali']}, Tenant Lain: {info['tenant_lain']}",
         f"Tersimpan di sesi sebagai \"{label}\" ({len(SESSIONS[update.effective_chat.id])} rekening total). Ketik /gabung untuk menggabungkan.",
