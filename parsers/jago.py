@@ -190,6 +190,45 @@ def build_transactions(pdf_path):
     return txns, saldo_awal, saldo_akhir
 
 
+def _merge_biaya_admin_rows(rows, saldo_awal, saldo_akhir):
+    """Jago sering mencatat bunga/pajak/biaya admin sebagai banyak baris
+    kecil di hari yang sama (kadang beberapa di antaranya bahkan tidak
+    tercatat nominalnya sama sekali di PDF karena dibulatkan ke 0) --
+    digabung jadi SATU baris "Biaya Admin", dan nominal gabungannya
+    disesuaikan supaya saldo berjalan pas tepat ke Saldo Akhir resmi,
+    menghilangkan celah pembulatan recehan yang selama ini cuma "hilang"
+    diam-diam."""
+    idx = [i for i, r in enumerate(rows) if r.get('kategori') == 'Biaya Admin & Pajak Bank']
+    if len(idx) < 2:
+        return rows
+
+    first_i, last_i = idx[0], idx[-1]
+    group = [rows[i] for i in idx]
+    combined_debit = sum(r.get('debit') or 0 for r in group)
+    combined_kredit = sum(r.get('kredit') or 0 for r in group)
+
+    merged = dict(group[-1])  # pakai baris terakhir sebagai basis (tanggal/catatan representatif)
+    merged['keterangan'] = 'Biaya Admin'
+    merged['kategori'] = 'Biaya Admin & Pajak Bank'
+    merged['debit'] = combined_debit or None
+    merged['kredit'] = combined_kredit or None
+
+    new_rows = rows[:first_i] + [merged] + rows[last_i + 1:]
+
+    # hitung ulang saldo berjalan dari titik gabungan sampai akhir, supaya
+    # baris terakhir pas persis ke saldo_akhir resmi (bukan hasil rekonstruksi)
+    running = rows[first_i - 1]['saldo'] if first_i > 0 else saldo_awal
+    merge_pos = first_i
+    for i in range(merge_pos, len(new_rows)):
+        r = new_rows[i]
+        running = round(running + (r.get('debit') or 0) + (r.get('kredit') or 0), 2)
+        r['saldo'] = running
+    if saldo_akhir is not None and new_rows:
+        new_rows[-1]['saldo'] = saldo_akhir
+
+    return new_rows
+
+
 def build_rows(pdf_path):
     txns, saldo_awal, saldo_akhir = build_transactions(pdf_path)
 
@@ -236,6 +275,7 @@ def build_rows(pdf_path):
         warning = f'Saldo akhir hasil konsolidasi {running:,.2f} != saldo akhir statement {saldo_akhir:,.2f}'
 
     apply_universal_fields(rows, ACCOUNT_CODES['jago'], {})
+    rows = _merge_biaya_admin_rows(rows, saldo_awal, saldo_akhir)
 
     bulan, tahun = '', ''
     ref = rows[0] if rows else (txns[0] if txns else None)
