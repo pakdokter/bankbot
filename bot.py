@@ -1,301 +1,445 @@
-import re
-import sys
-import pdfplumber
-from .common import write_xlsx, apply_universal_fields, ACCOUNT_CODES, month_name, build_filename
+import logging
+import os
+import tempfile
+from collections import Counter
 
-MONTH_MAP = {
-    'Jan': '01', 'Feb': '02', 'Mar': '03', 'Apr': '04', 'Mei': '05', 'May': '05',
-    'Jun': '06', 'Jul': '07', 'Agu': '08', 'Aug': '08', 'Sep': '09',
-    'Okt': '10', 'Oct': '10', 'Nov': '11', 'Des': '12', 'Dec': '12',
-}
-
-KNOWN_LABELS = sorted([
-    'Isi Saldo Dompet Digital', 'Tarik Uang Kantong', 'Tambah Uang Kantong',
-    'Pindah uang antar Kantong',
-    'Transfer Masuk', 'Transfer Keluar', 'Pembayaran QRIS', 'Transaksi POS',
-    'Pajak Bunga', 'Bunga',
-], key=len, reverse=True)
-
-INTERNAL_LABELS = {'Tarik Uang Kantong', 'Tambah Uang Kantong', 'Pindah uang antar Kantong'}
-
-BANK_KEYWORDS = ('BCA', 'BRI', 'Bank ', 'GoPay', 'OVO', 'DANA', 'Mandiri', 'Pindah uang antar Kantong')
-
-DATE_LINE_RE = re.compile(r'^(\d{2})\s([A-Za-z]{3})\s(\d{4})\s+(.*?)\s+([+-][\d.,]+)\s+([\d.,]+)$')
-KANTONG_HDR_RE = re.compile(r'^(.+?)\s+Saldo Sebelumnya\s+[\d.,]+$')
-TIME_RE = re.compile(r'^(\d{2}\.\d{2})\s+(.*)$')
-ID_RE = re.compile(r'ID#\s*(\d+)')
-
-SKIP_PREFIXES = (
-    'Laporan Keuangan Bulanan', 'PT Bank Jago Tbk', 'www.jago.com',
-    'merupakan peserta', 'Tanggal & Waktu',
-    'RINGKASAN SALDO', 'SOROTAN', 'KANTONG PERSONAL', 'KANTONG BERSAMA',
-    'Nama Kantong', 'Total Saldo Bersama',
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.constants import ChatAction
+from telegram.error import TimedOut, NetworkError
+from telegram.ext import (
+    Application, CommandHandler, MessageHandler, CallbackQueryHandler,
+    ContextTypes, filters,
 )
 
+from parsers.detect import parse_statement, BANK_LABELS
+from parsers import kasir as kasir_parser
+from parsers import preformatted as preformatted_parser
+from parsers import sales_detail as sales_detail_parser
+from parsers.common import write_xlsx, write_recon_xlsx, build_filename, sheet_title_from_meta, split_workbook, sanitize_filename
+from openpyxl import load_workbook
 
-def id_to_float(s):
-    """Indonesian number format: '.' thousands sep, ',' decimal sep."""
-    s = s.strip()
-    sign = 1
-    if s.startswith('+'):
-        s = s[1:]
-    elif s.startswith('-'):
-        sign = -1
-        s = s[1:]
-    s = s.replace('.', '').replace(',', '.')
-    return sign * float(s) if s else 0.0
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO,
+)
+logger = logging.getLogger(__name__)
 
+BOT_TOKEN = os.environ.get('BOT_TOKEN', '')
 
-def looks_like_bank_or_channel(s):
-    if not s:
-        return False
-    if any(ch.isdigit() for ch in s):
-        return True
-    return any(k in s for k in BANK_KEYWORDS)
+WELCOME = (
+    "Halo! Kirim aku:\n"
+    "- PDF rekening koran (BCA, BRI, atau Bank Jago),\n"
+    "- XLSX rekap kasir, atau\n"
+    "- XLSX rekening yang sudah diolah (format 9 kolom bot ini)\n\n"
+    "Nanti aku ubah/rapikan jadi XLSX format seragam: Tanggal, Keterangan Transaksi, "
+    "Kategori Transaksi, Debit, Kredit, Saldo Kumulatif, Subjek Transaksi, "
+    "Objek Transaksi, Keterangan Tambahan.\n\n"
+    "Ada 2 cara gabung beberapa rekening jadi satu file rekonsiliasi:\n"
+    "1. Upload dulu semua rekening, baru ketik /gabung untuk pilih mana saja yang mau digabung.\n"
+    "2. Ketik /gabung dulu, upload semua file, lalu ketik /selesai — langsung digabung semua "
+    "tanpa perlu pilih manual.\n\n"
+    "Ketik /sesi untuk lihat rekening apa saja yang sudah tersimpan, atau "
+    "/reset untuk mengosongkan semua sebelum menggabung (hindari salah gabung).\n\n"
+    "Kalau upload XLSX yang sheet-nya lebih dari satu (misal hasil /gabung), "
+    "otomatis dipecah lagi jadi file terpisah per sheet."
+)
 
-
-def extract_raw_lines(pdf_path):
-    lines = []
-    with pdfplumber.open(pdf_path) as pdf:
-        for page in pdf.pages:
-            text = page.extract_text() or ''
-            for raw in text.split('\n'):
-                line = raw.strip()
-                if not line or line.startswith(SKIP_PREFIXES):
-                    continue
-                if line.startswith('INFO PENTING'):
-                    return lines  # everything after this is footer disclaimer text
-                lines.append(line)
-    return lines
-
-
-def find_saldo_anchor(lines):
-    """Consolidated Saldo Sebelumnya / Saldo Akhir across all personal kantong."""
-    for i, l in enumerate(lines):
-        if l == 'Total Saldo Personal IDR' and i > 0:
-            m = re.match(r'^([\d.,]+)\s+([\d.,]+)$', lines[i - 1])
-            if m:
-                return id_to_float(m.group(1)), id_to_float(m.group(2))
-    return None, None
+# In-memory session per chat: list of {'label', 'rows', 'saldo_awal', 'saldo_akhir'}.
+# Lives only as long as the bot process runs — resets on redeploy/restart.
+SESSIONS = {}
+# Which entry indices are currently checked in the /gabung picker, per chat.
+SELECTIONS = {}
 
 
-def split_label(middle):
-    for label in KNOWN_LABELS:
-        pos = middle.rfind(label)
-        if pos == -1:
-            continue
-        end = pos + len(label)
-        if end == len(middle) or middle[end] == ' ':
-            return middle[:pos].strip(), label, middle[end:].strip()
-    return middle.strip(), '', ''
+def _session_add(chat_id, label, rows, saldo_awal, saldo_akhir, meta=None):
+    SESSIONS.setdefault(chat_id, []).append({
+        'label': label, 'rows': rows, 'saldo_awal': saldo_awal, 'saldo_akhir': saldo_akhir,
+        'bulan': (meta or {}).get('bulan', ''), 'tahun': (meta or {}).get('tahun', ''),
+    })
 
 
-def parse_blocks(lines):
-    blocks = []
-    current_kantong = None
-    cur = None
-    for line in lines:
-        m_k = KANTONG_HDR_RE.match(line)
-        if m_k:
-            if cur:
-                blocks.append(cur)
-                cur = None
-            current_kantong = m_k.group(1).strip()
-            continue
-        m_d = DATE_LINE_RE.match(line)
-        if m_d:
-            if cur:
-                blocks.append(cur)
-            cur = {'kantong': current_kantong, 'line1': m_d, 'extra': []}
-        else:
-            if cur is not None:
-                cur['extra'].append(line)
-    if cur:
-        blocks.append(cur)
-    return blocks
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(WELCOME)
 
 
-def build_transactions(pdf_path):
-    lines = extract_raw_lines(pdf_path)
-    saldo_awal, saldo_akhir = find_saldo_anchor(lines)
-    blocks = parse_blocks(lines)
+async def handle_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE, doc, tmp):
+    pdf_path = os.path.join(tmp, doc.file_name)
 
-    txns = []
-    for b in blocks:
-        dd, mon, yyyy, middle, jumlah_s, saldo_s = b['line1'].groups()
-        month = MONTH_MAP.get(mon, '01')
-        tanggal = f'{dd}/{month}/{yyyy}'
-        name_part, label, catatan_line1 = split_label(middle)
+    tg_file = await doc.get_file()
+    await tg_file.download_to_drive(pdf_path)
 
-        # "Pindah uang antar Kantong" kadang kepotong layout PDF-nya (mis.
-        # "...antar" nyangkut di baris ini, "Kantong"-nya baru muncul di
-        # baris berikut), jadi split_label() di atas bisa gagal mengenali
-        # labelnya. Cek juga gabungan seluruh teks blok ini sebagai jaring
-        # pengaman supaya transfer internal seperti ini tidak lolos jadi
-        # transaksi eksternal.
-        _full_block_text = re.sub(r'\s+', ' ', ' '.join([middle] + b['extra']))
-        if 'PINDAH UANG ANTAR' in _full_block_text.upper() and 'KANTONG' in _full_block_text.upper():
-            label = 'Pindah uang antar Kantong'
+    bank, info, xlsx_path, rows, meta = parse_statement(pdf_path, tmp)
+    label = sheet_title_from_meta(meta)
+    _session_add(update.effective_chat.id, label, rows, info.get('saldo_awal'), info.get('saldo_akhir'), meta)
 
-        time_s = ''
-        name_cont = ''
-        bank_lines = []
-        tx_id = ''
-        catatan_extra = ''
+    caption_lines = [
+        f"Bank terdeteksi: {BANK_LABELS.get(bank, bank)}",
+        f"Total baris transaksi: {info.get('jumlah_baris')}",
+    ]
+    if info.get('warnings'):
+        caption_lines.append(f"⚠️ {len(info['warnings'])} baris saldo tidak cocok checkpoint, cek manual.")
+    if info.get('warning'):
+        caption_lines.append(f"⚠️ {info['warning']}")
+    caption_lines.append(f"Tersimpan di sesi sebagai \"{label}\" ({len(SESSIONS[update.effective_chat.id])} rekening total). Ketik /gabung untuk menggabungkan.")
+    return xlsx_path, caption_lines
 
-        for idx, ex in enumerate(b['extra']):
-            m_t = TIME_RE.match(ex)
-            rest = ex
-            if m_t:
-                time_s = m_t.group(1)
-                rest = m_t.group(2)
-            m_id = ID_RE.search(rest)
-            if m_id:
-                tx_id = m_id.group(1)
-                before = rest[:m_id.start()].strip()
-                after = rest[m_id.end():].strip()
-                if before:
-                    if looks_like_bank_or_channel(before):
-                        bank_lines.append(before)
-                    else:
-                        name_cont = (name_cont + ' ' + before).strip()
-                if after:
-                    catatan_extra = (catatan_extra + ' ' + after).strip()
+
+async def handle_xlsx(update: Update, context: ContextTypes.DEFAULT_TYPE, doc, tmp, existing_path=None):
+    src_path = existing_path
+    if src_path is None:
+        src_path = os.path.join(tmp, doc.file_name)
+        tg_file = await doc.get_file()
+        await tg_file.download_to_drive(src_path)
+
+    # Laporan "Detail Penjualan" dari sistem kasir/POS -- beda dari
+    # semua yang lain karena satu file bisa menghasilkan BEBERAPA "akun
+    # interpretasi" sekaligus (Cash, QRIS+Kartu per bank), jadi dicek
+    # duluan sebelum kemungkinan-kemungkinan lain.
+    if sales_detail_parser.is_sales_detail(src_path):
+        groups, meta, warnings = sales_detail_parser.build_groups(src_path)
+        entries = []
+        added_labels = []
+        for group_name, data in groups.items():
+            sheet_title = group_name
+            if meta.get('bulan') and meta.get('tahun'):
+                sheet_title += f" {meta['bulan']} {meta['tahun']}"
+            session_label = f"Interpretasi {sheet_title}"
+            entries.append({'sheet_title': sheet_title, 'rows': data['rows'], 'saldo_awal': None, 'saldo_akhir': data['rows'][-1]['saldo'] if data['rows'] else None})
+            _session_add(update.effective_chat.id, session_label, data['rows'], None, data['rows'][-1]['saldo'] if data['rows'] else None, meta)
+            added_labels.append(session_label)
+
+        fname_bits = [b for b in ('Interpretasi Penjualan', meta.get('bulan'), meta.get('tahun')) if b]
+        filename = sanitize_filename(' '.join(fname_bits))
+        xlsx_path = os.path.join(tmp, filename)
+        write_recon_xlsx(entries, xlsx_path, include_blank_recon_tab=False)
+
+        caption_lines = [
+            'Laporan Detail Penjualan terdeteksi — dipecah per tujuan uangnya:',
+        ] + [f'- {label}' for label in added_labels] + [
+            '',
+            f"Tersimpan di sesi juga (total {len(SESSIONS[update.effective_chat.id])} rekening) supaya bisa "
+            "digabung/dibandingkan langsung sama statement bank/kasir aslinya lewat /gabung.",
+        ]
+        if warnings:
+            caption_lines.append('')
+            caption_lines.extend(f'⚠️ {w}' for w in warnings)
+        return xlsx_path, caption_lines
+
+    # An uploaded .xlsx could be a cashier report OR a statement that's
+    # already in this bot's own 9-column format (a manually reconstructed
+    # old statement, or a previous output the user annotated). Try the
+    # latter first since its header is unambiguous.
+    if preformatted_parser.is_preformatted(src_path):
+        rows, saldo_awal, saldo_akhir, info, meta = preformatted_parser.build_rows(src_path)
+        filename = build_filename(meta['self_code'], meta['bulan'], meta['tahun'])
+        xlsx_path = os.path.join(tmp, filename)
+        write_xlsx(rows, xlsx_path, saldo_awal=saldo_awal, saldo_akhir=saldo_akhir)
+
+        label = sheet_title_from_meta(meta)
+        _session_add(update.effective_chat.id, label, rows, saldo_awal, saldo_akhir, meta)
+
+        caption_lines = [
+            f"Rekening terdeteksi (format sudah diolah): {meta['self_code']}",
+            f"Total baris transaksi: {len(rows)}",
+        ]
+        if info.get('selisih_flags'):
+            caption_lines.append(f"⚠️ {info['selisih_flags']} baris punya selisih != 0 di kolom Selisih, cek manual.")
+        caption_lines.append(f"Tersimpan di sesi sebagai \"{label}\" ({len(SESSIONS[update.effective_chat.id])} rekening total). Ketik /gabung untuk menggabungkan.")
+        return xlsx_path, caption_lines
+
+    rows, saldo_awal, saldo_akhir, info, meta = kasir_parser.build_rows(src_path)
+    filename = build_filename(meta['self_code'], meta['bulan'], meta['tahun'])
+    xlsx_path = os.path.join(tmp, filename)
+    write_xlsx(rows, xlsx_path, saldo_awal=saldo_awal, saldo_akhir=saldo_akhir)
+
+    label = sheet_title_from_meta(meta)
+    _session_add(update.effective_chat.id, label, rows, saldo_awal, saldo_akhir, meta)
+
+    caption_lines = [
+        "Kas Buku Stoa Space (dikonversi ke format seragam)",
+        f"Total baris transaksi: {len(rows)}",
+        f"Toko dikenali: {info['toko_dikenali']}, Tenant Lain: {info['tenant_lain']}",
+        f"Tersimpan di sesi sebagai \"{label}\" ({len(SESSIONS[update.effective_chat.id])} rekening total). Ketik /gabung untuk menggabungkan.",
+    ]
+    return xlsx_path, caption_lines
+
+
+async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    doc = update.message.document
+    if not doc:
+        return
+    name = doc.file_name.lower()
+    is_pdf = name.endswith('.pdf')
+    is_xlsx = name.endswith('.xlsx')
+    if not (is_pdf or is_xlsx):
+        await update.message.reply_text('Kirim file PDF (rekening koran) atau XLSX (rekap kasir) ya.')
+        return
+
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+    status_msg = await update.message.reply_text('Lagi diproses...')
+
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            if is_xlsx:
+                # kalau file punya lebih dari 1 sheet, anggap ini permintaan
+                # "pisahkan per sheet" (kebalikan dari /gabung) — bukan satu
+                # statement/kasir tunggal untuk di-parse.
+                probe_path = os.path.join(tmp, doc.file_name)
+                tg_file = await doc.get_file()
+                await tg_file.download_to_drive(probe_path)
+                probe_wb = load_workbook(probe_path, read_only=True)
+                sheet_count = len(probe_wb.sheetnames)
+                probe_wb.close()
+
+                if sheet_count > 1:
+                    await handle_split(update, context, probe_path, tmp, status_msg)
+                    return
+                xlsx_path, caption_lines = await handle_xlsx(update, context, doc, tmp, existing_path=probe_path)
             else:
-                if rest:
-                    bank_lines.append(rest)
+                xlsx_path, caption_lines = await handle_pdf(update, context, doc, tmp)
+        except (TimedOut, NetworkError):
+            logger.exception('Timeout jaringan saat memproses %s', doc.file_name)
+            await status_msg.edit_text(
+                'Koneksi ke Telegram sempat timeout (biasanya sesaat setelah bot baru redeploy). '
+                'Coba kirim ulang file-nya.'
+            )
+            return
+        except ValueError as e:
+            await status_msg.edit_text(str(e))
+            return
+        except Exception:
+            logger.exception('Gagal memproses %s', doc.file_name)
+            await status_msg.edit_text(
+                'Gagal memproses file ini. Kemungkinan formatnya sedikit beda dari '
+                'yang sudah aku pelajari — kirim ke admin untuk dicek.'
+            )
+            return
 
-        objek = (name_part + ' ' + name_cont).strip()
-        if label in ('Bunga', 'Pajak Bunga'):
-            objek = ''  # Sumber/Tujuan is just self-referential to the kantong
-        jumlah = id_to_float(jumlah_s)
-        saldo_kantong = id_to_float(saldo_s)
-        catatan = '; '.join(p for p in [catatan_line1, catatan_extra] if p)
-        bank_info = '; '.join(bank_lines)
-
-        txns.append({
-            'kantong': b['kantong'],
-            'tanggal': tanggal,
-            'sort_key': (yyyy, month, dd, time_s.replace('.', ':')),
-            'time': time_s,
-            'label': label,
-            'jumlah': jumlah,
-            'saldo_kantong': saldo_kantong,
-            'objek': objek,
-            'tx_id': tx_id,
-            'catatan': catatan,
-            'bank_info': bank_info,
-        })
-
-    return txns, saldo_awal, saldo_akhir
+        await status_msg.edit_text('\n'.join(caption_lines))
+        with open(xlsx_path, 'rb') as f:
+            await update.message.reply_document(document=f, filename=os.path.basename(xlsx_path))
 
 
-def _merge_biaya_admin_rows(rows, saldo_awal, saldo_akhir):
-    """Jago sering mencatat bunga/pajak/biaya admin sebagai banyak baris
-    kecil di hari yang sama (kadang beberapa di antaranya bahkan tidak
-    tercatat nominalnya sama sekali di PDF karena dibulatkan ke 0) --
-    digabung jadi SATU baris "Biaya Admin", dan nominal gabungannya
-    disesuaikan supaya saldo berjalan pas tepat ke Saldo Akhir resmi,
-    menghilangkan celah pembulatan recehan yang selama ini cuma "hilang"
-    diam-diam."""
-    idx = [i for i, r in enumerate(rows) if r.get('kategori') == 'Biaya Admin & Pajak Bank']
-    if len(idx) < 2:
-        return rows
-
-    first_i, last_i = idx[0], idx[-1]
-    group = [rows[i] for i in idx]
-    combined_debit = sum(r.get('debit') or 0 for r in group)
-    combined_kredit = sum(r.get('kredit') or 0 for r in group)
-
-    merged = dict(group[-1])  # pakai baris terakhir sebagai basis (tanggal/catatan representatif)
-    merged['keterangan'] = 'Biaya Admin'
-    merged['kategori'] = 'Biaya Admin & Pajak Bank'
-    merged['debit'] = combined_debit or None
-    merged['kredit'] = combined_kredit or None
-
-    new_rows = rows[:first_i] + [merged] + rows[last_i + 1:]
-
-    # hitung ulang saldo berjalan dari titik gabungan sampai akhir, supaya
-    # baris terakhir pas persis ke saldo_akhir resmi (bukan hasil rekonstruksi)
-    running = rows[first_i - 1]['saldo'] if first_i > 0 else saldo_awal
-    merge_pos = first_i
-    for i in range(merge_pos, len(new_rows)):
-        r = new_rows[i]
-        running = round(running + (r.get('debit') or 0) + (r.get('kredit') or 0), 2)
-        r['saldo'] = running
-    if saldo_akhir is not None and new_rows:
-        new_rows[-1]['saldo'] = saldo_akhir
-
-    return new_rows
+async def handle_split(update: Update, context: ContextTypes.DEFAULT_TYPE, src_path, tmp, status_msg):
+    outputs = split_workbook(src_path, tmp)
+    await status_msg.edit_text(f'File ini punya {len(outputs)} sheet — dipecah jadi {len(outputs)} file terpisah:')
+    for sheet_name, out_path in outputs:
+        with open(out_path, 'rb') as f:
+            await context.bot.send_document(
+                chat_id=update.effective_chat.id, document=f, filename=os.path.basename(out_path),
+                caption=sheet_name,
+            )
 
 
-def build_rows(pdf_path):
-    txns, saldo_awal, saldo_akhir = build_transactions(pdf_path)
-
-    external = [t for t in txns if t['label'] not in INTERNAL_LABELS]
-    external.sort(key=lambda t: t['sort_key'])
-
+def _gabung_keyboard(chat_id):
+    entries = SESSIONS.get(chat_id, [])
+    selected = SELECTIONS.setdefault(chat_id, set())
     rows = []
-    running = saldo_awal if saldo_awal is not None else 0.0
-    for t in external:
-        debit = t['jumlah'] if t['jumlah'] < 0 else None
-        kredit = t['jumlah'] if t['jumlah'] > 0 else None
-        running = round(running + t['jumlah'], 2)
+    for i, e in enumerate(entries):
+        mark = '✅' if i in selected else '⬜'
+        rows.append([
+            InlineKeyboardButton(f'{mark} {e["label"]}', callback_data=f'toggle:{i}'),
+            InlineKeyboardButton('🗑', callback_data=f'remove:{i}'),
+        ])
+    rows.append([
+        InlineKeyboardButton('✅ Pilih semua', callback_data='select_all'),
+        InlineKeyboardButton('⬜ Kosongkan pilihan', callback_data='select_none'),
+    ])
+    rows.append([
+        InlineKeyboardButton('📎 Proses Gabung', callback_data='process'),
+        InlineKeyboardButton('🧹 Hapus Semua Sesi', callback_data='reset_all'),
+    ])
+    rows.append([InlineKeyboardButton('Batal', callback_data='cancel')])
+    return InlineKeyboardMarkup(rows)
 
-        note_parts = []
-        if t['bank_info']:
-            note_parts.append(t['bank_info'])
-        if t['catatan']:
-            note_parts.append(f"Catatan: {t['catatan']}")
-        if t['tx_id']:
-            note_parts.append(f"ID#: {t['tx_id']}")
-        note_parts.append(f"Kantong: {t['kantong']}")
-        if t['time']:
-            note_parts.append(f"Jam: {t['time'].replace('.', ':')}")
 
-        rows.append({
-            'tanggal': t['tanggal'],
-            'keterangan': t['label'],
-            'debit': debit,
-            'kredit': kredit,
-            'saldo': running,
-            'objek': t['objek'],
-            'catatan': '; '.join(note_parts),
-        })
+async def sesi_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    entries = SESSIONS.get(chat_id, [])
+    if not entries:
+        await update.message.reply_text('Sesi kosong — belum ada rekening yang diproses.')
+        return
+    lines = [f'{i + 1}. {e["label"]}' for i, e in enumerate(entries)]
+    await update.message.reply_text(
+        f'Ada {len(entries)} rekening tersimpan di sesi ini:\n' + '\n'.join(lines) +
+        '\n\nKetik /gabung untuk menggabungkan, atau /reset untuk mengosongkan semua.'
+    )
 
-    # Saldo Awal/Akhir yang DIPAKAI di output selalu anchor resmi dari
-    # "Total Saldo Personal IDR" di statement -- bukan hasil rekonstruksi
-    # `running` di atas. Selisih kecil (recehan) antara keduanya wajar
-    # terjadi karena bunga di kantong-kantong kecil (GoPay/Stockbit dst)
-    # sering dibulatkan jadi "+0"/"-0" duluan oleh Jago sendiri di PDF-nya,
-    # jadi tidak bisa direkonstruksi presisi. Cuma selisih yang genuinely
-    # besar yang perlu diperingatkan ke user.
-    warning = None
-    if saldo_akhir is not None and abs(running - saldo_akhir) > 5:
-        warning = f'Saldo akhir hasil konsolidasi {running:,.2f} != saldo akhir statement {saldo_akhir:,.2f}'
 
-    apply_universal_fields(rows, ACCOUNT_CODES['jago'], {})
-    rows = _merge_biaya_admin_rows(rows, saldo_awal, saldo_akhir)
+async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    count = len(SESSIONS.get(chat_id, []))
+    SESSIONS[chat_id] = []
+    SELECTIONS[chat_id] = set()
+    if count:
+        await update.message.reply_text(f'Sesi dikosongkan — {count} rekening yang tersimpan sudah dihapus.')
+    else:
+        await update.message.reply_text('Sesi memang sudah kosong.')
 
-    bulan, tahun = '', ''
-    ref = rows[0] if rows else (txns[0] if txns else None)
-    if ref:
-        d, m, y = ref['tanggal'].split('/')
-        bulan, tahun = month_name(m), y
-    meta = {'self_code': ACCOUNT_CODES['jago'], 'bulan': bulan, 'tahun': tahun}
-    return rows, saldo_awal, saldo_akhir, warning, meta
+
+async def gabung_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    entries = SESSIONS.get(chat_id, [])
+    if not entries:
+        await update.message.reply_text(
+            'Mode gabung aktif. Upload sekarang semua PDF/XLSX rekening yang mau digabung '
+            '(satu-satu juga boleh), lalu ketik /selesai kalau sudah — nanti langsung digabung '
+            'semua tanpa perlu pilih manual lagi.\n\n'
+            '(Atau kalau berubah pikiran, upload dulu semuanya baru ketik /gabung lagi nanti '
+            'untuk pilih rekening mana saja yang mau digabung.)'
+        )
+        return
+    SELECTIONS[chat_id] = set(range(len(entries)))  # default: semua terpilih
+    await update.message.reply_text(
+        'Pilih rekening yang mau digabung jadi satu file rekonsiliasi (satu sheet per rekening):',
+        reply_markup=_gabung_keyboard(chat_id),
+    )
+
+
+async def selesai_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    entries = SESSIONS.get(chat_id, [])
+    if not entries:
+        await update.message.reply_text(
+            'Belum ada rekening yang diupload di sesi ini. Upload dulu PDF/XLSX-nya, baru ketik /selesai.'
+        )
+        return
+    status_msg = await update.message.reply_text(f'Memproses gabungan {len(entries)} rekening...')
+    await _merge_and_deliver(context, chat_id, list(entries), status_msg.edit_text)
+
+
+async def _merge_and_deliver(context, chat_id, chosen, edit_message):
+    """chosen: daftar entri sesi yang mau digabung. edit_message: async
+    callable(text) buat lapor status (bisa dari pesan command atau dari
+    callback query). Dipakai bareng oleh tombol "Proses Gabung" di /gabung
+    dan oleh command /selesai."""
+    bulan_tahun_counter = Counter(
+        (e['bulan'], e['tahun']) for e in chosen if e.get('bulan') and e.get('tahun')
+    )
+    if bulan_tahun_counter:
+        (bulan, tahun), _ = bulan_tahun_counter.most_common(1)[0]
+        recap_name = f'Rekap {bulan} {tahun}.xlsx'
+    else:
+        recap_name = 'Rekap Gabungan.xlsx'
+
+    with tempfile.TemporaryDirectory() as tmp:
+        out_path = os.path.join(tmp, recap_name)
+        recon_entries = [{
+            'sheet_title': e['label'], 'rows': e['rows'],
+            'saldo_awal': e['saldo_awal'], 'saldo_akhir': e['saldo_akhir'],
+        } for e in chosen]
+        write_recon_xlsx(recon_entries, out_path)
+
+        # sesi otomatis dikosongkan begitu selesai gabung, supaya tidak
+        # kebawa/kegabung lagi tanpa sengaja di /gabung berikutnya
+        SESSIONS[chat_id] = []
+        SELECTIONS[chat_id] = set()
+
+        await edit_message(
+            f'Digabung {len(chosen)} rekening: ' + ', '.join(e['label'] for e in chosen) +
+            '\n\nSesi sudah otomatis dikosongkan.'
+        )
+        with open(out_path, 'rb') as f:
+            await context.bot.send_document(chat_id=chat_id, document=f, filename=os.path.basename(out_path))
+
+
+async def gabung_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    chat_id = update.effective_chat.id
+    entries = SESSIONS.get(chat_id, [])
+    selected = SELECTIONS.setdefault(chat_id, set())
+    data = query.data
+
+    if data.startswith('toggle:'):
+        idx = int(data.split(':', 1)[1])
+        if idx in selected:
+            selected.discard(idx)
+        else:
+            selected.add(idx)
+        await query.answer()
+        await query.edit_message_reply_markup(reply_markup=_gabung_keyboard(chat_id))
+        return
+
+    if data.startswith('remove:'):
+        idx = int(data.split(':', 1)[1])
+        if 0 <= idx < len(entries):
+            removed = entries.pop(idx)
+            # geser index yang lebih besar dari idx supaya tetap nyambung
+            # ke entri yang sama setelah satu dihapus dari tengah daftar
+            new_selected = set()
+            for s in selected:
+                if s < idx:
+                    new_selected.add(s)
+                elif s > idx:
+                    new_selected.add(s - 1)
+            SELECTIONS[chat_id] = new_selected
+            await query.answer(f'"{removed["label"]}" dihapus dari sesi.')
+        else:
+            await query.answer()
+        if not entries:
+            await query.edit_message_text('Sesi sekarang kosong. Upload rekening baru lalu ketik /gabung lagi.')
+            return
+        await query.edit_message_reply_markup(reply_markup=_gabung_keyboard(chat_id))
+        return
+
+    if data == 'reset_all':
+        SESSIONS[chat_id] = []
+        SELECTIONS[chat_id] = set()
+        await query.answer('Sesi dikosongkan.')
+        await query.edit_message_text('Semua rekening di sesi ini sudah dihapus. Upload ulang lalu ketik /gabung kalau perlu.')
+        return
+
+    if data == 'select_all':
+        SELECTIONS[chat_id] = set(range(len(entries)))
+        await query.answer()
+        await query.edit_message_reply_markup(reply_markup=_gabung_keyboard(chat_id))
+        return
+
+    if data == 'select_none':
+        SELECTIONS[chat_id] = set()
+        await query.answer()
+        await query.edit_message_reply_markup(reply_markup=_gabung_keyboard(chat_id))
+        return
+
+    if data == 'cancel':
+        await query.answer('Dibatalkan.')
+        await query.edit_message_text('Digagalkan — sesi rekeningmu masih tersimpan, ketik /gabung lagi kapan saja.')
+        return
+
+    if data == 'process':
+        if not selected:
+            await query.answer('Pilih minimal satu rekening dulu.', show_alert=True)
+            return
+        await query.answer('Memproses...')
+        chosen = [entries[i] for i in sorted(selected)]
+        await _merge_and_deliver(context, chat_id, chosen, query.edit_message_text)
+        return
+
+
+def main():
+    if not BOT_TOKEN:
+        raise SystemExit('BOT_TOKEN env var belum diset.')
+
+    app = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        .read_timeout(60)
+        .write_timeout(60)
+        .connect_timeout(30)
+        .get_updates_read_timeout(60)
+        .build()
+    )
+    app.add_handler(CommandHandler('start', start))
+    app.add_handler(CommandHandler('gabung', gabung_command))
+    app.add_handler(CommandHandler('selesai', selesai_command))
+    app.add_handler(CommandHandler('sesi', sesi_command))
+    app.add_handler(CommandHandler('reset', reset_command))
+    app.add_handler(CallbackQueryHandler(gabung_callback))
+    app.add_handler(MessageHandler(filters.Document.PDF | filters.Document.FileExtension('xlsx'), handle_document))
+
+    logger.info('Bot jalan...')
+    app.run_polling()
 
 
 if __name__ == '__main__':
-    pdf_path = sys.argv[1]
-    out_path = sys.argv[2]
-    rows, saldo_awal, saldo_akhir, warning, meta = build_rows(pdf_path)
-    write_xlsx(rows, out_path, saldo_awal=saldo_awal, saldo_akhir=saldo_akhir)
-    print(f'Total baris (transaksi eksternal saja): {len(rows)}')
-    print(f'Saldo awal konsolidasi: {saldo_awal}')
-    print(f'Saldo akhir statement (anchor): {saldo_akhir}')
-    print('Nama file disarankan:', build_filename(meta['self_code'], meta['bulan'], meta['tahun']))
-    if warning:
-        print('PERINGATAN:', warning)
-    else:
-        print('Saldo akhir hasil konsolidasi cocok dengan statement.')
+    main()
