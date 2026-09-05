@@ -404,6 +404,17 @@ def apply_universal_fields(rows, self_code='', entity_code_map=None):
         r['kategori'] = categorize(raw_ket, r.get('objek'), r.get('catatan'), debit, kredit)
         r['keterangan'] = normalize_keterangan(raw_ket, debit, kredit)
 
+        # "Transfer Masuk" yang mendarat di kategori generik/ambigu (bukan
+        # kategori spesifik seperti Penjualan/Modal & Setoran Pemilik dst)
+        # selalu dicurigai sebagai transfer antar rekening sendiri, bukan
+        # uang masuk dari pihak luar yang genuinely belum jelas -- seragamkan
+        # jadi Transaksi Internal di kedua kolom.
+        if r['keterangan'] == 'Transfer Masuk' and r['kategori'] in (
+            'Transaksi Internal', 'Pindah Rekening Internal', 'Transfer Lainnya',
+        ):
+            r['keterangan'] = 'Transaksi Internal'
+            r['kategori'] = 'Transaksi Internal'
+
         counterparty = resolve_party(r.get('objek', ''), self_code, entity_code_map)
         if not counterparty or counterparty == '-':
             if r['kategori'].strip().lower().startswith('belanja'):
