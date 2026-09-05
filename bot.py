@@ -14,7 +14,8 @@ from telegram.ext import (
 from parsers.detect import parse_statement, BANK_LABELS
 from parsers import kasir as kasir_parser
 from parsers import preformatted as preformatted_parser
-from parsers.common import write_xlsx, write_recon_xlsx, build_filename, sheet_title_from_meta, split_workbook
+from parsers import sales_detail as sales_detail_parser
+from parsers.common import write_xlsx, write_recon_xlsx, build_filename, sheet_title_from_meta, split_workbook, sanitize_filename
 from openpyxl import load_workbook
 
 logging.basicConfig(
@@ -89,6 +90,40 @@ async def handle_xlsx(update: Update, context: ContextTypes.DEFAULT_TYPE, doc, t
         src_path = os.path.join(tmp, doc.file_name)
         tg_file = await doc.get_file()
         await tg_file.download_to_drive(src_path)
+
+    # Laporan "Detail Penjualan" dari sistem kasir/POS -- beda dari
+    # semua yang lain karena satu file bisa menghasilkan BEBERAPA "akun
+    # interpretasi" sekaligus (Cash, QRIS+Kartu per bank), jadi dicek
+    # duluan sebelum kemungkinan-kemungkinan lain.
+    if sales_detail_parser.is_sales_detail(src_path):
+        groups, meta, warnings = sales_detail_parser.build_groups(src_path)
+        entries = []
+        added_labels = []
+        for group_name, data in groups.items():
+            sheet_title = group_name
+            if meta.get('bulan') and meta.get('tahun'):
+                sheet_title += f" {meta['bulan']} {meta['tahun']}"
+            session_label = f"Interpretasi {sheet_title}"
+            entries.append({'sheet_title': sheet_title, 'rows': data['rows'], 'saldo_awal': None, 'saldo_akhir': data['rows'][-1]['saldo'] if data['rows'] else None})
+            _session_add(update.effective_chat.id, session_label, data['rows'], None, data['rows'][-1]['saldo'] if data['rows'] else None, meta)
+            added_labels.append(session_label)
+
+        fname_bits = [b for b in ('Interpretasi Penjualan', meta.get('bulan'), meta.get('tahun')) if b]
+        filename = sanitize_filename(' '.join(fname_bits))
+        xlsx_path = os.path.join(tmp, filename)
+        write_recon_xlsx(entries, xlsx_path, include_blank_recon_tab=False)
+
+        caption_lines = [
+            'Laporan Detail Penjualan terdeteksi — dipecah per tujuan uangnya:',
+        ] + [f'- {label}' for label in added_labels] + [
+            '',
+            f"Tersimpan di sesi juga (total {len(SESSIONS[update.effective_chat.id])} rekening) supaya bisa "
+            "digabung/dibandingkan langsung sama statement bank/kasir aslinya lewat /gabung.",
+        ]
+        if warnings:
+            caption_lines.append('')
+            caption_lines.extend(f'⚠️ {w}' for w in warnings)
+        return xlsx_path, caption_lines
 
     # An uploaded .xlsx could be a cashier report OR a statement that's
     # already in this bot's own 9-column format (a manually reconstructed
