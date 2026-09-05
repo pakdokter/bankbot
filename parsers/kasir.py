@@ -43,6 +43,10 @@ OWNER_NAME_MARKERS = ('OJAN', 'IYAN', 'ROZIYAN')
 GENERIC_MONEY_WORDS = {'LEBIH', 'KURANG', 'MINUS', 'KEMBALI', 'CUSTOMER'}
 
 SETORAN_RE = re.compile(r'^Setoran\s+ke\s+(.+)$', re.I)
+# "Uang <Nama>" / "Lebih" / "Kembalian Print Menu" -- selisih kas kecil
+# (uang lebih/kurang di laci, sering ditulis atas nama kasir yang megang
+# sesi itu) selalu masuk Tip/Minus/Lebih, bukan Penerimaan/Pengeluaran biasa.
+TIP_MINUS_RE = re.compile(r'^UANG\s|^LEBIH$|^KEMBALIAN\s+PRINT\s+MENU$', re.I)
 SETORAN_TUNAI_RE = re.compile(r'SETOR(?:AN)?\s*TUNAI', re.I)
 BANK_TRANSFER_RE = re.compile(r'(?:DARI|KE)\s+BANK\s+(.+)$', re.I)
 
@@ -285,6 +289,10 @@ def build_rows(xlsx_path, sheet_name=None):
 
         # --- pola khusus yang sudah dikonfirmasi lewat feedback: berlaku di
         # semua dokumen kasir, bukan cuma satu bulan tertentu ---
+        if TIP_MINUS_RE.match(keterangan.strip()):
+            item_text = 'Tip/Minus/Lebih'
+            kategori = 'Tip/Minus/Lebih'
+
         gaji = match_gaji(keterangan)
         if gaji:
             employee_name, gaji_bulan_text = gaji
