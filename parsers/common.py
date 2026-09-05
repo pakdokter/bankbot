@@ -97,7 +97,152 @@ ACCOUNT_CODES = {
     'bca_giro': 'BCA-292(Biz)',
     'jago': 'Jago',
 }
+KNOWN_BANK_CODES = set(ACCOUNT_CODES.values()) | {'Kas/Buku'}
 FLIPTECH_LABEL = 'Rekening Lain (via Fliptech)'
+
+# --- kata kunci/orang/merchant yang sudah dikonfirmasi lewat feedback
+# (revisi Januari 2025 BCA-887/BRI-507/BRI-567(Biz)/Jago) -- berlaku
+# untuk semua statement bank berikutnya, bukan cuma bulan itu saja.
+# Format tiap entri: (pola_regex, keterangan_baru_atau_None, kategori_baru_atau_None, objek_baru_atau_None)
+# None berarti field itu tidak disentuh/dipertahankan apa adanya.
+OBJEK_KNOWN_MAP = [
+    (r'CV\s*HARAPAN\s*KITA', 'Belanja Tool', None, None),
+    (r'NIDAUL\s*JIHAD', 'Belanja Ayam', 'Belanja Bahan', None),
+    (r'MIRA\s*LAUNDRY', 'Laundry', None, None),
+    (r'DECO\s*COFFEE', 'Belanja Konsumsi', None, None),
+    (r'ORIEL\s*CHICKEN', 'Belanja Konsumsi', None, None),
+    (r'KURNIA\s*UTAMI\s*NUR', 'Belanja Bahan', 'Belanja Bahan', None),
+    (r'PT\.?\s*DUTA\s*TEKNOLOGI\s*KREATIF', 'Bayar Layanan', None, None),
+    (r'SUKANDA\s*JAYA', 'Belanja UHT', 'Belanja Bahan', None),
+    (r'SAFWAN\s*HARIADI', 'Belanja Bahan', 'Belanja Bahan', None),
+    (r'SEAKUN\.?ID', 'Bayar Layanan', 'Belanja Bahan', None),
+    (r'YULIA\s*INDAH\s*PRATIW', 'Belanja Plastik', 'Belanja Operasional', None),
+    (r'MEILINA\s*PUSPITASAR', 'Belanja Bahan', 'Belanja Bahan', None),
+    (r'LUSIANA\s*VALUFI', 'Belanja Pasar', 'Belanja Bahan', None),
+    (r'RIZKY\s*TRIE\s*ADHI', 'Listrik', 'Belanja Operasional', None),
+    (r'\bMADAM\b', 'Belanja Bahan', 'Belanja Bahan', None),
+    (r'SHOPEE(?:PAY)?', 'Belanja Shopee', 'Belanja Bahan', None),
+    (r'PRIMER', 'Belanja Bahan', 'Belanja Bahan', None),
+    (r'SINAR\s*BAHAGIA', 'Belanja SB', 'Belanja Bahan', None),
+    (r'ADOBE', 'Bayar Layanan Adobe', None, None),
+    (r'TOKO\s*SURYA', 'Belanja Bahan', 'Belanja Bahan', None),
+]
+OBJEK_KNOWN_MAP = [(re.compile(pat, re.I), ket, kat, obj) for pat, ket, kat, obj in OBJEK_KNOWN_MAP]
+
+# orang yang cuma dikenali lewat namanya SENDIRI (bukan lewat kata kunci di
+# catatan) -- kalau namanya tersebut, langsung anggap "Belanja Widia" dst.
+# Tapi kalau Baiq Widiani MUNCUL BARENG kata kunci SB di bawah, aturan SB
+# yang menang (dicek lebih dulu).
+PERSON_KNOWN_MAP = [
+    (r'BAIQ\s*WIDIANI', 'Belanja Widia', None, None),
+]
+PERSON_KNOWN_MAP = [(re.compile(pat, re.I), ket, kat, obj) for pat, ket, kat, obj in PERSON_KNOWN_MAP]
+
+CATATAN_KNOWN_MAP = [
+    (r'TIKTOK', 'Iklan Tiktok', 'Marketing', None),
+    (r'BELI\s*MASKER|\bMASKER\b', 'Beli Masker', 'Belanja Operasional', 'Tenant Lain'),
+    (r'BELANJA\s*PASAR', 'Belanja Pasar', 'Belanja Bahan', None),
+    (r'\bLISTRIK\b', 'Listrik', 'Belanja Operasional', None),
+]
+CATATAN_KNOWN_MAP = [(re.compile(pat, re.I), ket, kat, obj) for pat, ket, kat, obj in CATATAN_KNOWN_MAP]
+
+BELANJA_SB_RE = re.compile(r'BELANJA\s*SB|\bSB\b', re.I)
+AUTOCR_RE = re.compile(r'AUTOCR-PL|WSID', re.I)
+INTERNAL_DR_RE = re.compile(r'\bDR\s*\d+\b|BIF\s*TRANSFER\s*DR', re.I)
+GAJI_BONUS_RE = re.compile(r'GAJI\s+BONUS\s+(\w+)', re.I)
+TANGGAL_NOTE_RE = re.compile(r'TANGGAL\s*:\s*(\d{2})/(\d{2})', re.I)
+GENERIC_KETERANGAN_LABELS = {
+    'Transfer Keluar', 'Transfer Masuk', 'Transaksi POS', 'Pembayaran QRIS',
+    'Top Up Gopay', 'KARTU DEBIT',
+}
+
+
+def _gaji_bonus_override(catatan, tanggal_str):
+    """catatan 'gaji bonus gia' (+ opsional 'TANGGAL :31/12') -> keterangan
+    'Gaji Gia Desember 24'. Kalau tidak ada catatan tanggal eksplisit,
+    tebak bulan sebelumnya dari tanggal transaksi (gaji awal bulan =
+    gaji bulan sebelumnya)."""
+    m = GAJI_BONUS_RE.search(catatan or '')
+    if not m or not tanggal_str:
+        return None
+    name = m.group(1).title()
+    d, mo, y = (int(x) for x in tanggal_str.split('/'))
+
+    tm = TANGGAL_NOTE_RE.search(catatan or '')
+    if tm:
+        ref_month, ref_year_2digit = int(tm.group(2)), None
+        ref_year = y if ref_month <= mo else y - 1
+    else:
+        ref_month = mo - 1 if mo > 1 else 12
+        ref_year = y if mo > 1 else y - 1
+    return f'Gaji {name} {month_name(ref_month)} {str(ref_year)[-2:]}'
+
+
+def _apply_learned_overrides(keterangan, kategori, objek, catatan, debit, kredit):
+    """Aturan spesifik yang sudah dikonfirmasi via revisi manual (Jan 2025)
+    -- dipanggil setelah normalize_keterangan()+categorize() standar,
+    boleh menimpa keduanya kalau match. Urutan penting: yang paling
+    spesifik dicek duluan."""
+    ob = objek or ''
+    cat_text = catatan or ''
+
+    # baris yang SUDAH benar terdeteksi sebagai biaya admin/bunga bank
+    # tidak boleh ditimpa oleh aturan merchant/orang di bawah -- kadang
+    # field "objek" mentah dari bank untuk baris potongan biaya berisi
+    # nama pihak yang tidak relevan (sisa dari transaksi lain), jadi
+    # kategori yang sudah benar harus dipertahankan, cuma keterangan yang
+    # diseragamkan jadi "Biaya Admin" (termasuk yang tadinya "Bunga Bank")
+    if kategori == 'Biaya Admin & Pajak Bank':
+        return 'Biaya Admin', kategori, objek
+
+    if AUTOCR_RE.search(cat_text):
+        return 'Setoran Tunai', 'Transaksi Internal', objek
+    if INTERNAL_DR_RE.search(cat_text):
+        return 'Transaksi Internal', 'Transaksi Internal', objek
+
+    if BELANJA_SB_RE.search(cat_text) and 'SINAR BAHAGIA' not in ob.upper():
+        return 'Belanja SB', 'Belanja Bahan', 'Sinar Bahagia'
+
+    # "Pembayaran BRIVA ke SHOPEE" dst -- SHOPEE kadang cuma disebut di
+    # keterangan/label mentahnya, bukan di kolom objek (objek malah berisi
+    # nomor VA/nama tersamar dari BRI)
+    if re.search(r'SHOPEE(?:PAY)?', keterangan, re.I):
+        return 'Belanja Shopee', 'Belanja Bahan', objek
+
+    for pattern, ket, kat, obj_override in OBJEK_KNOWN_MAP:
+        if pattern.search(ob):
+            new_ket = ket if ket else keterangan
+            new_kat = kat if kat else kategori
+            new_obj = obj_override if obj_override else objek
+            return new_ket, new_kat, new_obj
+
+    for pattern, ket, kat, obj_override in CATATAN_KNOWN_MAP:
+        if pattern.search(cat_text):
+            new_ket = ket if ket else keterangan
+            new_kat = kat if kat else kategori
+            new_obj = obj_override if obj_override else objek
+            return new_ket, new_kat, new_obj
+
+    for pattern, ket, kat, obj_override in PERSON_KNOWN_MAP:
+        if pattern.search(ob):
+            new_ket = ket if ket else keterangan
+            new_kat = kat if kat else kategori
+            new_obj = obj_override if obj_override else objek
+            return new_ket, new_kat, new_obj
+
+    if kategori in ('Transaksi Internal', 'Pindah Rekening Internal', 'Transfer Lainnya'):
+        return 'Transaksi Internal', 'Transaksi Internal', objek
+
+    if keterangan == 'Top Up Gopay':
+        return 'Belanja Konsumsi', kategori, objek
+
+    if keterangan in GENERIC_KETERANGAN_LABELS.union({'Penjualan QRIS'}) and (
+        kategori in ('Belanja Operasional', 'Belanja Bahan', 'Penjualan')
+    ):
+        return kategori, kategori, objek
+
+    return keterangan, kategori, objek
+
 
 # --- kategori transaksi untuk kebutuhan akuntansi operasional Stoa -------
 # Heuristik berbasis kata kunci pada objek/catatan, plus lookup merchant dan
@@ -320,7 +465,7 @@ def categorize(keterangan, objek, catatan, debit, kredit):
 def _categorize_raw(ket, ob, text, debit, kredit):
     if ket == 'SALDO AWAL':
         return 'Saldo Awal'
-    if ket in ('BUNGA', 'BUNGA BANK', 'PAJAK BUNGA', 'BIAYA ADMIN', 'BIAYA ADM', 'ADMIN TRANSFER'):
+    if ket in ('BUNGA', 'BUNGA BANK', 'PAJAK BUNGA', 'BIAYA ADMIN', 'BIAYA ADM', 'ADMIN TRANSFER', 'INTEREST ON ACCOUNT'):
         return 'Biaya Admin & Pajak Bank'
     if 'BIAYA PEMBAYARAN' in text:
         return 'Biaya Admin & Pajak Bank'
@@ -367,6 +512,11 @@ def _categorize_raw(ket, ob, text, debit, kredit):
         return 'Belanja Operasional'
     if any(k in ket for k in TRANSFER_TYPES):
         return 'Belanja Operasional' if debit else 'Transfer Lainnya'
+    # QRIS ke merchant yang tidak dikenal diasumsikan belanja bahan baku
+    # (kebanyakan transaksi QRIS harian Stoa memang belanja dapur), beda
+    # dari transfer bank biasa yang tidak dikenal (tetap Operasional)
+    if debit and 'QRIS' in ket:
+        return 'Belanja Bahan'
     # kategori generik yang belum kena aturan spesifik apa pun -- selama
     # uangnya keluar, anggap belanja operasional biasa dulu daripada
     # dibiarkan tak terkategori terus
@@ -404,23 +554,35 @@ def apply_universal_fields(rows, self_code='', entity_code_map=None):
         r['kategori'] = categorize(raw_ket, r.get('objek'), r.get('catatan'), debit, kredit)
         r['keterangan'] = normalize_keterangan(raw_ket, debit, kredit)
 
-        # "Transfer Masuk" yang mendarat di kategori generik/ambigu (bukan
-        # kategori spesifik seperti Penjualan/Modal & Setoran Pemilik dst)
-        # selalu dicurigai sebagai transfer antar rekening sendiri, bukan
-        # uang masuk dari pihak luar yang genuinely belum jelas -- seragamkan
-        # jadi Transaksi Internal di kedua kolom.
-        if r['keterangan'] == 'Transfer Masuk' and r['kategori'] in (
-            'Transaksi Internal', 'Pindah Rekening Internal', 'Transfer Lainnya',
-        ):
-            r['keterangan'] = 'Transaksi Internal'
-            r['kategori'] = 'Transaksi Internal'
+        # aturan spesifik yang sudah dikonfirmasi lewat revisi manual --
+        # bisa menimpa keterangan/kategori/objek dari langkah standar di atas
+        gaji_ket = _gaji_bonus_override(r.get('catatan'), r.get('tanggal'))
+        if gaji_ket:
+            r['keterangan'] = gaji_ket
+        else:
+            r['keterangan'], r['kategori'], r['objek'] = _apply_learned_overrides(
+                r['keterangan'], r['kategori'], r.get('objek'), r.get('catatan'), debit, kredit,
+            )
 
+        raw_objek_for_check = r.get('objek')
         counterparty = resolve_party(r.get('objek', ''), self_code, entity_code_map)
         if not counterparty or counterparty == '-':
             if r['kategori'].strip().lower().startswith('belanja'):
                 counterparty = 'Tenant Lain'
+
+        # "Modal & Setoran Pemilik" yang counterparty-nya ternyata resolve
+        # ke salah satu rekening Stoa sendiri (bukan orang) sebenarnya
+        # transfer antar rekening biasa, bukan setoran modal -- tapi cuma
+        # kalau objek mentahnya memang ada isinya (bukan kosong yang
+        # kebetulan default ke self_code karena tidak ada info sama sekali)
+        if (raw_objek_for_check not in (None, '', '-') and counterparty in KNOWN_BANK_CODES
+                and r['kategori'] == 'Modal & Setoran Pemilik'):
+            r['keterangan'], r['kategori'] = 'Transaksi Internal', 'Transaksi Internal'
+
         if r.get('_is_opening_balance'):
             r['subjek'], r['objek'] = '-', '-'
+        elif r['kategori'] == 'Biaya Admin & Pajak Bank':
+            r['subjek'], r['objek'] = '-', (self_code or 'Rekening Ini')
         elif debit:
             r['subjek'], r['objek'] = (self_code or 'Rekening Ini'), counterparty
         elif kredit:
@@ -488,6 +650,18 @@ def populate_sheet(ws, rows, self_code='', entity_code_map=None, saldo_awal=None
 
     data_last_row = ws.max_row
 
+    # Saldo Kumulatif selalu rumus (bukan angka statis) mulai baris data
+    # pertama, supaya kalau Debit/Kredit di-edit manual saldo-nya otomatis
+    # ikut kehitung ulang. Baris Saldo Awal (kalau ada) tetap angka literal
+    # karena tidak ada baris F sebelumnya untuk dirujuk. Kalau TIDAK ada
+    # baris Saldo Awal (mis. laporan interpretasi penjualan), baris data
+    # pertama tidak boleh merujuk F1 (itu header teks, bukan angka).
+    for row_num in range(data_start_row, data_last_row + 1):
+        if row_num == data_start_row and not anchor_rows:
+            ws.cell(row=row_num, column=6, value=f'=D{row_num}+E{row_num}')
+        else:
+            ws.cell(row=row_num, column=6, value=f'=D{row_num}+E{row_num}+F{row_num - 1}')
+
     # baris data: font seragam + border rapi + selang-seling warna baris genap
     for row in ws.iter_rows(min_row=data_start_row, max_row=data_last_row):
         is_alt = (row[0].row - data_start_row) % 2 == 1
@@ -502,6 +676,11 @@ def populate_sheet(ws, rows, self_code='', entity_code_map=None, saldo_awal=None
             cell.font = FONT_BOLD
             cell.fill = ANCHOR_FILL
             cell.border = CELL_BORDER
+
+    # filter mencakup dari header sampai baris data terakhir -- baris Saldo
+    # Awal (baris 2) ikut termasuk dalam rentang yang bisa difilter, bukan
+    # dikecualikan sebagai anchor terpisah.
+    ws.auto_filter.ref = f'A1:I{data_last_row}'
 
     ws.append([])
     summary_start = ws.max_row + 1
