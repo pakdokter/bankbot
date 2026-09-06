@@ -253,6 +253,12 @@ def build_rows(xlsx_path, sheet_name=None):
         })
 
     self_code = party_counter.most_common(1)[0][0] if party_counter else 'Rekening'
+    # "Kasir" adalah nama lama sebelum diseragamkan jadi "Kas/Buku" -- file
+    # lama yang diupload ulang (atau hasil proses sebelum penyeragaman itu)
+    # masih bisa punya label ini persis di datanya, jadi dinormalisasi di
+    # sini supaya tidak lolos ke rekonsiliasi dengan nama yang beda sendiri.
+    if self_code.strip().upper() == 'KASIR':
+        self_code = 'Kas/Buku'
     if month_year_counter:
         (m, y), _ = month_year_counter.most_common(1)[0]
         bulan, tahun = month_name(m), y
