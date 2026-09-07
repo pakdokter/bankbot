@@ -300,7 +300,7 @@ for _name, _canonical in SHARED_EMPLOYEE_ALIASES.items():
     EMPLOYEE_ALIASES.setdefault(str(_name).strip().upper(), _canonical)
 
 BULAN_PATTERN = 'Januari|Februari|Maret|April|Mei|Juni|Juli|Agustus|September|Oktober|November|Desember'
-GAJI_RE = re.compile(rf'^Gaji\s+(.+?)(?:\s+({BULAN_PATTERN})(?:\s+\d{{4}})?)?$', re.I)
+GAJI_RE = re.compile(rf'^Gaji\s+(.+?)(?:\s+({BULAN_PATTERN})(?:\s+\d{{2,4}})?)?$', re.I)
 
 
 def match_gaji(keterangan):
