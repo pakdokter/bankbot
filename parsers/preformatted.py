@@ -72,6 +72,39 @@ KOREKSI_RE = re.compile(r'KOREKSI', re.I)
 SETORAN_RE = re.compile(r'SETOR(?:AN)?\s*TUNAI|SETORAN', re.I)
 BANK_NAME_RE = re.compile(r'\b(BCA|BRI|MANDIRI|JAGO|BSI|BNI|CIMB)\b', re.I)
 
+# --- kas buku: pisahkan parkir dari belanja, dan tarik nama tenant dari
+# pola "Vendor – Item" (dikonfirmasi lewat revisi Kas Buku Februari 2025) --
+REFUND_KETERANGAN_RE = re.compile(r'^REFUND\b', re.I)
+COD_RE = re.compile(r'^COD\b', re.I)
+PARKIR_EXACT_RE = re.compile(r'^PARKIR$', re.I)
+PLUS_PARKIR_RE = re.compile(r'^(.*?)\s*\+\s*Parkir\s*$', re.I)
+VENDOR_ITEM_RE = re.compile(r'^(.*?)\s*[–-]\s*(.+)$')
+PARKIR_AMOUNT = 2000.0
+ES_BATU_ESTIMATE = 12000.0
+VENDOR_NAME_ALIASES = {'MR. DIY': 'Mr. DIY', 'MR DIY': 'Mr. DIY', 'AMANAH': 'Amanah'}
+
+
+def _vendor_from_belanja(desc):
+    """desc tanpa 'Belanja ' di depan, mis. 'Kiki – Mak Opik Bawang',
+    'Sekar Dinda Frozen – Kentang', 'Gia Abadi – Es Batu', 'Luna (Abadi) – Es Batu x2',
+    'Upi (AMANAH) – Creamch.', 'Kurnia – Plastik'. Returns (employee, vendor_or_None, item)."""
+    m = re.match(r'^(\S+)\s*(?:\(([^)]+)\))?\s*(.*)$', desc)
+    if not m:
+        return desc, None, ''
+    employee, paren_vendor, rest = m.groups()
+    rest = rest.strip()
+    if paren_vendor:
+        item = re.sub(r'^[–-]\s*', '', rest)
+        return employee, paren_vendor.strip(), item
+    m2 = VENDOR_ITEM_RE.match(rest)
+    if m2:
+        maybe_vendor, item = m2.groups()
+        maybe_vendor = maybe_vendor.strip()
+        if maybe_vendor:
+            return employee, maybe_vendor, item.strip()
+        return employee, None, item.strip()
+    return employee, None, rest
+
 
 def _apply_keyword_overrides(keterangan, kategori, objek, catatan, is_kredit=False):
     """Returns (keterangan, kategori, objek) after applying every keyword
@@ -84,6 +117,17 @@ def _apply_keyword_overrides(keterangan, kategori, objek, catatan, is_kredit=Fal
 
     if KOREKSI_RE.search(keterangan):
         return 'Tip/Minus', 'Tip/Minus/Lebih', objek
+
+    if REFUND_KETERANGAN_RE.match(keterangan.strip()):
+        return keterangan, 'Penjualan', objek
+
+    if COD_RE.match(keterangan.strip()):
+        return 'Belanja Shopee', 'Belanja Bahan', 'Shopee'
+
+    if PARKIR_EXACT_RE.match(keterangan.strip()):
+        # parkir tidak pernah terkait tenant/vendor transaksi sebelumnya --
+        # objek selalu dinetralkan, apa pun yang kebetulan ada di kolom itu
+        return keterangan, 'Belanja Operasional', 'Tenant Lain'
 
     gaji = match_gaji(keterangan)
     if gaji:
@@ -133,6 +177,50 @@ def _apply_keyword_overrides(keterangan, kategori, objek, catatan, is_kredit=Fal
     # biasa daripada dibiarkan sebagai label transfer mentah
     if new_kategori.strip().upper() in GENERIC_UNRESOLVED_CATEGORIES and not is_kredit:
         new_kategori = 'Belanja Operasional'
+
+    # tarik nama tenant dari pola "Belanja <Karyawan> [Vendor] – Item" kalau
+    # belum kena aturan spesifik apa pun di atas (mis. Dinda Frozen, Abadi --
+    # vendor yang belum masuk KEYWORD_RULES, atau memang tidak ada vendornya
+    # sama sekali sehingga nama karyawan dipakai)
+    objek_unresolved = not new_objek or new_objek in ('-', 'Tenant Lain')
+    keterangan_masih_asli = new_keterangan == keterangan
+    if objek_unresolved and keterangan_masih_asli and re.match(r'^BELANJA\s+', keterangan, re.I) \
+            and not re.match(r'^BELANJA\s+(BAHAN|OPERASIONAL|KONSUMSI)\b', keterangan, re.I):
+        employee, vendor, item = _vendor_from_belanja(re.sub(r'^BELANJA\s+', '', keterangan, flags=re.I).strip())
+        if vendor:
+            vendor_norm = VENDOR_NAME_ALIASES.get(vendor.upper(), vendor)
+            new_objek = vendor_norm
+            new_keterangan = item if item else vendor_norm
+        else:
+            new_objek = employee
+            if item:
+                new_keterangan = item
+    elif objek_unresolved and keterangan_masih_asli:
+        # fallback umum: pola "Vendor – Item" biasa (Bintang, Abadi, Istana
+        # Sosis, Toko Buah, Qia Mart, dst -- vendor apa pun yang belum
+        # dikenal secara eksplisit lewat KEYWORD_RULES di atas)
+        m_vi = VENDOR_ITEM_RE.match(keterangan)
+        if m_vi:
+            vendor, item = m_vi.groups()
+            vendor, item = vendor.strip(), item.strip()
+            if vendor and not COD_RE.match(vendor):
+                new_objek = vendor
+                new_keterangan = item if item else vendor
+
+    # kalaupun vendornya sudah dikenal lewat KEYWORD_RULES (mis. FADHILAH,
+    # MAK OPIK) di atas, keterangannya masih baris utuh "Vendor – Item" --
+    # sederhanakan jadi item saja karena nama tenantnya sudah pindah ke objek.
+    # Hanya kalau vendor yang ketarik dari tanda pisah itu benar-benar cocok
+    # sama objek yang sudah ditentukan -- supaya "V-Soy"/"Lap – 8.500" (yang
+    # kebetulan ada tanda pisah tapi bukan pola Vendor-Item) tidak ketimpa.
+    if keterangan_masih_asli and new_keterangan == keterangan and new_objek and new_objek not in ('-', 'Tenant Lain'):
+        m_vi = VENDOR_ITEM_RE.match(keterangan)
+        if m_vi:
+            vendor, item = m_vi.groups()
+            vendor, item = vendor.strip(), item.strip()
+            vendor_matches_objek = vendor.upper() in new_objek.upper() or new_objek.upper() in vendor.upper()
+            if item and vendor.upper() != 'COD' and vendor_matches_objek:
+                new_keterangan = item
 
     if new_kategori.strip().lower().startswith('belanja') and (not new_objek or new_objek == '-'):
         new_objek = 'Tenant Lain'
@@ -216,6 +304,13 @@ def build_rows(xlsx_path, sheet_name=None):
         subjek = str(get(row, 'subjek') or '')
         objek = str(get(row, 'objek') or '')
         catatan = str(get(row, 'catatan') or '')
+        # "Kasir" adalah nama lama sebelum diseragamkan jadi "Kas/Buku" --
+        # normalisasi di level baris juga, bukan cuma di self_code, supaya
+        # tidak ada sisa label lama yang lolos ke output.
+        if subjek.strip().upper() == 'KASIR':
+            subjek = 'Kas/Buku'
+        if objek.strip().upper() == 'KASIR':
+            objek = 'Kas/Buku'
 
         if kategori.strip().upper().startswith('SALDO AWAL') or keterangan.strip().upper().startswith('SALDO AWAL'):
             # beberapa file manual cuma isi Kredit (atau Debit) untuk baris
@@ -316,6 +411,59 @@ def build_rows(xlsx_path, sheet_name=None):
                         'catatan': f'Bagian dari transaksi Fliptech: {keterangan}',
                     })
                 continue
+
+        # "Vendor – Item1 & Es Batu + Parkir" atau "Item + Parkir" biasa --
+        # pisahkan ongkos parkir (dan Es Batu kalau tergabung) dari belanja
+        # utamanya supaya masing-masing kelihatan sendiri-sendiri.
+        m_parkir = PLUS_PARKIR_RE.match(keterangan) if debit is not None else None
+        if m_parkir:
+            base_desc = m_parkir.group(1).strip().rstrip('–- ').strip()
+            has_es_batu = bool(re.search(r'&\s*Es\s*Batu', base_desc, re.I))
+            if has_es_batu:
+                main_item = re.sub(r'\s*&\s*Es\s*Batu', '', base_desc, flags=re.I).strip().rstrip('–- ').strip()
+                main_amt = debit + PARKIR_AMOUNT + ES_BATU_ESTIMATE
+                m_v = VENDOR_ITEM_RE.match(main_item)
+                vendor_guess = m_v.group(1).strip() if m_v else (objek if objek and objek != '-' else None)
+                item_only = m_v.group(2).strip() if m_v else main_item
+                ket1, kat1, obj1 = _apply_keyword_overrides(main_item, kategori, objek, catatan, is_kredit=False)
+                _emit({
+                    'tanggal': tgl_str, 'keterangan': ket1, 'kategori': kat1,
+                    'debit': main_amt, 'kredit': None, 'saldo': None,
+                    'subjek': subjek, 'objek': obj1,
+                    'catatan': f'Dipecah dari: {keterangan}',
+                })
+                es_batu_vendor = obj1 if obj1 and obj1 != 'Tenant Lain' else (vendor_guess or 'Tenant Lain')
+                _emit({
+                    'tanggal': tgl_str, 'keterangan': 'Es Batu', 'kategori': 'Belanja Bahan',
+                    'debit': -ES_BATU_ESTIMATE, 'kredit': None, 'saldo': None,
+                    'subjek': subjek, 'objek': es_batu_vendor,
+                    'catatan': f'Estimasi harga Es Batu (~Rp{ES_BATU_ESTIMATE:,.0f}), dipecah dari: {keterangan}',
+                })
+                _emit({
+                    'tanggal': tgl_str, 'keterangan': 'Parkir', 'kategori': 'Belanja Operasional',
+                    'debit': -PARKIR_AMOUNT, 'kredit': None, 'saldo': saldo,
+                    'subjek': subjek, 'objek': 'Tenant Lain',
+                    'catatan': f'Dipecah dari: {keterangan}',
+                })
+            else:
+                base_amt = debit + PARKIR_AMOUNT
+                ket1, kat1, obj1 = _apply_keyword_overrides(base_desc, kategori, objek, catatan, is_kredit=False)
+                if obj1 == 'Tenant Lain' and not VENDOR_ITEM_RE.match(base_desc) and not re.match(r'^BELANJA\s+', base_desc, re.I):
+                    # base_desc cuma nama vendor polos tanpa rincian item, mis. "Fadhilah"
+                    obj1 = base_desc
+                _emit({
+                    'tanggal': tgl_str, 'keterangan': ket1, 'kategori': kat1,
+                    'debit': base_amt, 'kredit': None, 'saldo': None,
+                    'subjek': subjek, 'objek': obj1,
+                    'catatan': f'Dipecah dari: {keterangan}',
+                })
+                _emit({
+                    'tanggal': tgl_str, 'keterangan': 'Parkir', 'kategori': 'Belanja Operasional',
+                    'debit': -PARKIR_AMOUNT, 'kredit': None, 'saldo': saldo,
+                    'subjek': subjek, 'objek': 'Tenant Lain',
+                    'catatan': f'Dipecah dari: {keterangan}',
+                })
+            continue
 
         keterangan, kategori, objek = _apply_keyword_overrides(
             keterangan, kategori, objek, catatan, is_kredit=(kredit is not None)
