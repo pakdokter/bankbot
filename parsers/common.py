@@ -126,6 +126,9 @@ OBJEK_KNOWN_MAP = [
     (r'SINAR\s*BAHAGIA', 'Belanja SB', 'Belanja Bahan', None),
     (r'ADOBE', 'Bayar Layanan Adobe', None, None),
     (r'TOKO\s*SURYA', 'Belanja Bahan', 'Belanja Bahan', None),
+    (r'MUH\s*YANI', 'Pembayaran Hutang', 'Pembayaran Hutang', None),
+    (r'SITI\s*HUMAIRO', 'Ayam', 'Belanja Bahan', None),
+    (r'YUSRAN\s*FAILANI', 'Belanja Cleo', 'Belanja Operasional', None),
 ]
 OBJEK_KNOWN_MAP = [(re.compile(pat, re.I), ket, kat, obj) for pat, ket, kat, obj in OBJEK_KNOWN_MAP]
 
@@ -145,6 +148,21 @@ CATATAN_KNOWN_MAP = [
     (r'\bLISTRIK\b', 'Listrik', 'Belanja Operasional', None),
 ]
 CATATAN_KNOWN_MAP = [(re.compile(pat, re.I), ket, kat, obj) for pat, ket, kat, obj in CATATAN_KNOWN_MAP]
+
+# kata kunci di KETERANGAN itu sendiri (kolom B) yang selalu disederhanakan
+# ke label + kategori tetap, apa pun teks lengkap aslinya
+KETERANGAN_SIMPLIFY_MAP = [
+    (r'TOP\s*UP\s*DANA', 'Belanja Konsumsi', 'Belanja Konsumsi'),
+    (r'TOP\s*UP\s*OVO', 'Belanja Konsumsi', 'Belanja Konsumsi'),
+    (r'TOP\s*UP\s*GOPAY', 'Belanja Konsumsi', 'Belanja Konsumsi'),
+    (r'PHOTOBOOTH', 'Penjualan Photobooth', 'Penjualan'),
+    (r'KANTONG\s*WIDIA', 'Belanja Widia', 'Belanja Bahan'),
+    (r'KANTONG\s*KURNIA', 'Belanja Kurnia', 'Belanja Bahan'),
+    (r'ES\s*BATU', 'Es Batu', 'Belanja Operasional'),
+    (r'RISOL', 'Risol', 'Belanja Bahan'),
+]
+KETERANGAN_SIMPLIFY_MAP = [(re.compile(pat, re.I), ket, kat) for pat, ket, kat in KETERANGAN_SIMPLIFY_MAP]
+PARKIR_KECIL_RE = re.compile(r'PARKIR', re.I)
 
 BELANJA_SB_RE = re.compile(r'BELANJA\s*SB|\bSB\b', re.I)
 AUTOCR_RE = re.compile(r'AUTOCR-PL|WSID', re.I)
@@ -230,11 +248,16 @@ def _apply_learned_overrides(keterangan, kategori, objek, catatan, debit, kredit
             new_obj = obj_override if obj_override else objek
             return new_ket, new_kat, new_obj
 
+    # parkir kecil (<Rp10.000) -- selalu disederhanakan, apa pun teks aslinya
+    if PARKIR_KECIL_RE.search(keterangan) and debit is not None and abs(debit) < 10000:
+        return 'Parkir', 'Belanja Operasional', objek
+
+    for pattern, ket, kat in KETERANGAN_SIMPLIFY_MAP:
+        if pattern.search(keterangan):
+            return ket, kat, objek
+
     if kategori in ('Transaksi Internal', 'Pindah Rekening Internal', 'Transfer Lainnya'):
         return 'Transaksi Internal', 'Transaksi Internal', objek
-
-    if keterangan == 'Top Up Gopay':
-        return 'Belanja Konsumsi', kategori, objek
 
     if keterangan in GENERIC_KETERANGAN_LABELS.union({'Penjualan QRIS'}) and (
         kategori in ('Belanja Operasional', 'Belanja Bahan', 'Penjualan')
@@ -465,7 +488,8 @@ def categorize(keterangan, objek, catatan, debit, kredit):
 def _categorize_raw(ket, ob, text, debit, kredit):
     if ket == 'SALDO AWAL':
         return 'Saldo Awal'
-    if ket in ('BUNGA', 'BUNGA BANK', 'PAJAK BUNGA', 'BIAYA ADMIN', 'BIAYA ADM', 'ADMIN TRANSFER', 'INTEREST ON ACCOUNT'):
+    if ket in ('BUNGA', 'BUNGA BANK', 'PAJAK BUNGA', 'BIAYA ADMIN', 'BIAYA ADM', 'ADMIN TRANSFER',
+               'INTEREST ON ACCOUNT', 'MINIMUM BALANCE FEE', 'CR KOREKSI BUNGA'):
         return 'Biaya Admin & Pajak Bank'
     if 'BIAYA PEMBAYARAN' in text:
         return 'Biaya Admin & Pajak Bank'
