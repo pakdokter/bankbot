@@ -213,6 +213,11 @@ def _apply_learned_overrides(keterangan, kategori, objek, catatan, debit, kredit
     if kategori == 'Biaya Admin & Pajak Bank':
         return 'Biaya Admin', kategori, objek
 
+    # belanja/pembayaran pribadi (di luar Stoa) -- dipisah dari
+    # rekonsiliasi bisnis, jadi keterangan+kategori diseragamkan
+    if kategori == 'Belanja Pribadi':
+        return 'Belanja Pribadi', kategori, objek
+
     if AUTOCR_RE.search(cat_text):
         return 'Setoran Tunai', 'Transaksi Internal', objek
     if INTERNAL_DR_RE.search(cat_text):
@@ -354,6 +359,7 @@ CATEGORIES_REFERENCE = [
     'Penarikan',
     'Penerimaan',
     'Pembayaran Hutang',
+    'Belanja Pribadi',
     'Modal & Setoran Pemilik',
     'Pindah Rekening Internal',
     'Transaksi Internal',
@@ -390,6 +396,7 @@ RECON_KNOWN_CATEGORIES = {
     'Penarikan',
     'Penerimaan',
     'Pembayaran Hutang',
+    'Belanja Pribadi',
     'Pindah Rekening Internal',
     'Pindang Rekening Internal',
     'Transfer Internal',
@@ -495,6 +502,8 @@ def categorize(keterangan, objek, catatan, debit, kredit):
 def _categorize_raw(ket, ob, text, debit, kredit):
     if ket == 'SALDO AWAL':
         return 'Saldo Awal'
+    if 'BELANJA PRIBADI' in text or 'PEMBAYARAN PRIBADI' in text:
+        return 'Belanja Pribadi'
     if ket in ('BUNGA', 'BUNGA BANK', 'PAJAK BUNGA', 'BIAYA ADMIN', 'BIAYA ADM', 'ADMIN TRANSFER',
                'INTEREST ON ACCOUNT', 'MINIMUM BALANCE FEE', 'CR KOREKSI BUNGA'):
         return 'Biaya Admin & Pajak Bank'
