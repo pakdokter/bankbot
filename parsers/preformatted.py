@@ -39,14 +39,14 @@ KEYWORD_RULES = [
     (r'BEANS', 'Belanja Bahan', None),
     (r'SHOPEE', 'Belanja Bahan', 'Shopee'),
     (r'SINAR BAHAGIA', 'Belanja Bahan', 'Sinar Bahagia'),
-    (r'KONSUMSI', 'Belanja Operasional', None),
-    (r'\bWEB\b', 'Belanja Operasional', None),
-    (r'UTILITIES', 'Belanja Operasional', None),
-    (r'SPOTIFY', 'Belanja Operasional', None),
-    (r'TELKOM', 'Belanja Operasional', None),
+    (r'KONSUMSI', 'OpEx', None),
+    (r'\bWEB\b', 'Overhead', None),
+    (r'UTILITIES', 'Overhead', None),
+    (r'SPOTIFY', 'Overhead', None),
+    (r'TELKOM', 'Overhead', None),
     (r'MR\s*DIY', None, 'MR DIY'),
     (r'PELATIHAN', 'Riset dan Pengembangan', None),
-    (r'TARIKAN?\s*ATM', 'Belanja Operasional', None),
+    (r'TARIKAN?\s*ATM', 'OpEx', None),
     (r'INDOMARET', None, 'Indomaret'),
     (r'MASUYA', None, 'Masuya'),
     (r'ANUGERAH', None, 'Anugerah'),
@@ -127,7 +127,7 @@ def _apply_keyword_overrides(keterangan, kategori, objek, catatan, is_kredit=Fal
     if PARKIR_EXACT_RE.match(keterangan.strip()):
         # parkir tidak pernah terkait tenant/vendor transaksi sebelumnya --
         # objek selalu dinetralkan, apa pun yang kebetulan ada di kolom itu
-        return keterangan, 'Belanja Operasional', 'Tenant Lain'
+        return keterangan, 'OpEx', 'Tenant Lain'
 
     gaji = match_gaji(keterangan)
     if gaji:
@@ -176,7 +176,7 @@ def _apply_keyword_overrides(keterangan, kategori, objek, catatan, is_kredit=Fal
     # atas -- selama uangnya keluar, anggap sebagai belanja operasional
     # biasa daripada dibiarkan sebagai label transfer mentah
     if new_kategori.strip().upper() in GENERIC_UNRESOLVED_CATEGORIES and not is_kredit:
-        new_kategori = 'Belanja Operasional'
+        new_kategori = 'OpEx'
 
     # tarik nama tenant dari pola "Belanja <Karyawan> [Vendor] – Item" kalau
     # belum kena aturan spesifik apa pun di atas (mis. Dinda Frozen, Abadi --
@@ -222,7 +222,7 @@ def _apply_keyword_overrides(keterangan, kategori, objek, catatan, is_kredit=Fal
             if item and vendor.upper() != 'COD' and vendor_matches_objek:
                 new_keterangan = item
 
-    if new_kategori.strip().lower().startswith('belanja') and (not new_objek or new_objek == '-'):
+    if (new_kategori.strip().lower().startswith('belanja') or new_kategori in ('Overhead', 'OpEx')) and (not new_objek or new_objek == '-'):
         new_objek = 'Tenant Lain'
 
     return new_keterangan, new_kategori, new_objek
@@ -440,7 +440,7 @@ def build_rows(xlsx_path, sheet_name=None):
                     'catatan': f'Estimasi harga Es Batu (~Rp{ES_BATU_ESTIMATE:,.0f}), dipecah dari: {keterangan}',
                 })
                 _emit({
-                    'tanggal': tgl_str, 'keterangan': 'Parkir', 'kategori': 'Belanja Operasional',
+                    'tanggal': tgl_str, 'keterangan': 'Parkir', 'kategori': 'OpEx',
                     'debit': -PARKIR_AMOUNT, 'kredit': None, 'saldo': saldo,
                     'subjek': subjek, 'objek': 'Tenant Lain',
                     'catatan': f'Dipecah dari: {keterangan}',
@@ -458,7 +458,7 @@ def build_rows(xlsx_path, sheet_name=None):
                     'catatan': f'Dipecah dari: {keterangan}',
                 })
                 _emit({
-                    'tanggal': tgl_str, 'keterangan': 'Parkir', 'kategori': 'Belanja Operasional',
+                    'tanggal': tgl_str, 'keterangan': 'Parkir', 'kategori': 'OpEx',
                     'debit': -PARKIR_AMOUNT, 'kredit': None, 'saldo': saldo,
                     'subjek': subjek, 'objek': 'Tenant Lain',
                     'catatan': f'Dipecah dari: {keterangan}',
