@@ -115,6 +115,9 @@ def _apply_keyword_overrides(keterangan, kategori, objek, catatan, is_kredit=Fal
     if ob_upper in MODAL_MASUK_NAMES or MODAL_MASUK_KETERANGAN_RE.match(keterangan.strip()):
         return 'Modal Masuk', 'Modal & Setoran Pemilik', objek
 
+    if 'BELANJA PRIBADI' in text or 'PEMBAYARAN PRIBADI' in text:
+        return 'Belanja Pribadi', 'Belanja Pribadi', objek
+
     if KOREKSI_RE.search(keterangan):
         return 'Tip/Minus', 'Tip/Minus/Lebih', objek
 
