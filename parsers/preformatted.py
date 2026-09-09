@@ -115,8 +115,12 @@ def _apply_keyword_overrides(keterangan, kategori, objek, catatan, is_kredit=Fal
     if ob_upper in MODAL_MASUK_NAMES or MODAL_MASUK_KETERANGAN_RE.match(keterangan.strip()):
         return 'Modal Masuk', 'Modal & Setoran Pemilik', objek
 
-    if 'BELANJA PRIBADI' in text or 'PEMBAYARAN PRIBADI' in text:
-        return 'Belanja Pribadi', 'Belanja Pribadi', objek
+    # Pengeluaran Pribadi (owner) -- penanda eksplisit wajib diketik manual,
+    # dicek PALING PERTAMA (sesudah Modal Masuk) dan begitu ketemu langsung
+    # dipakai apa adanya -- keterangan/objek TIDAK disentuh, cuma kategori
+    # yang di-set, dan tidak ada aturan lain di bawah yang boleh menimpa.
+    if any(k in f'{text} {ob_upper}' for k in ('PRIBADI', 'PERSONAL', 'BUAT SENDIRI')):
+        return keterangan, 'Pengeluaran Pribadi', objek
 
     if KOREKSI_RE.search(keterangan):
         return 'Tip/Minus', 'Tip/Minus/Lebih', objek
