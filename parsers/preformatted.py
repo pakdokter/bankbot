@@ -190,10 +190,10 @@ def _apply_keyword_overrides(keterangan, kategori, objek, catatan, is_kredit=Fal
                 new_objek = obj
 
     # kategori generik/tidak jelas yang belum kena aturan spesifik apa pun di
-    # atas -- selama uangnya keluar, anggap sebagai belanja operasional
-    # biasa daripada dibiarkan sebagai label transfer mentah
+    # atas -- benar-benar tidak ada info yang bisa mengelompokkannya ke
+    # kategori OpEx yang lebih spesifik, jadi langsung masuk Overhead
     if new_kategori.strip().upper() in GENERIC_UNRESOLVED_CATEGORIES and not is_kredit:
-        new_kategori = 'Belanja Operasional'
+        new_kategori = 'Overhead'
 
     # tarik nama tenant dari pola "Belanja <Karyawan> [Vendor] – Item" kalau
     # belum kena aturan spesifik apa pun di atas (mis. Dinda Frozen, Abadi --
