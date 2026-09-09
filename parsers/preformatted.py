@@ -39,14 +39,14 @@ KEYWORD_RULES = [
     (r'BEANS', 'Belanja Bahan', None),
     (r'SHOPEE', 'Belanja Bahan', 'Shopee'),
     (r'SINAR BAHAGIA', 'Belanja Bahan', 'Sinar Bahagia'),
-    (r'KONSUMSI', 'OpEx', None),
+    (r'KONSUMSI', 'Belanja Konsumsi', None),
     (r'\bWEB\b', 'Overhead', None),
     (r'UTILITIES', 'Overhead', None),
     (r'SPOTIFY', 'Overhead', None),
     (r'TELKOM', 'Overhead', None),
     (r'MR\s*DIY', None, 'MR DIY'),
     (r'PELATIHAN', 'Riset dan Pengembangan', None),
-    (r'TARIKAN?\s*ATM', 'OpEx', None),
+    (r'TARIKAN?\s*ATM', 'Belanja Operasional', None),
     (r'INDOMARET', None, 'Indomaret'),
     (r'MASUYA', None, 'Masuya'),
     (r'ANUGERAH', None, 'Anugerah'),
@@ -106,7 +106,7 @@ def _vendor_from_belanja(desc):
     return employee, None, rest
 
 
-def _apply_keyword_overrides(keterangan, kategori, objek, catatan, is_kredit=False):
+def _apply_keyword_overrides(keterangan, kategori, objek, catatan, is_kredit=False, debit=None):
     """Returns (keterangan, kategori, objek) after applying every keyword
     rule confirmed via feedback. Order matters: more specific rules first."""
     text = f'{keterangan} {catatan}'.upper()
@@ -134,7 +134,7 @@ def _apply_keyword_overrides(keterangan, kategori, objek, catatan, is_kredit=Fal
     if PARKIR_EXACT_RE.match(keterangan.strip()):
         # parkir tidak pernah terkait tenant/vendor transaksi sebelumnya --
         # objek selalu dinetralkan, apa pun yang kebetulan ada di kolom itu
-        return keterangan, 'OpEx', 'Tenant Lain'
+        return keterangan, 'Belanja Operasional', 'Tenant Lain'
 
     gaji = match_gaji(keterangan)
     if gaji:
@@ -170,6 +170,16 @@ def _apply_keyword_overrides(keterangan, kategori, objek, catatan, is_kredit=Fal
     if PRIMER_RE.search(text):
         return 'Belanja Bahan', 'Belanja Bahan', 'Primer'
 
+    GALON_RE_LOCAL = re.compile(r'\bCLEO\b|\bGALON\b|AIR\s*MINUM', re.I)
+    if GALON_RE_LOCAL.search(text):
+        return 'Belanja Galon', 'Belanja Bahan', objek
+
+    ASSET_RE_LOCAL = re.compile(r'FURNITURE|MESIN|TOOLS|PERALATAN|MEUBEL|KULKAS|FREEZER', re.I)
+    if ASSET_RE_LOCAL.search(text):
+        if debit is not None and abs(debit) >= 500000:
+            return keterangan, 'Belanja Assets', objek
+        return keterangan, 'Belanja Operasional', objek
+
     new_keterangan = 'Belanja Konsumsi' if KONSUMSI_RE.search(text) else keterangan
     new_kategori, new_objek = kategori, objek
     for pattern, kat, obj in KEYWORD_RULES:
@@ -183,7 +193,7 @@ def _apply_keyword_overrides(keterangan, kategori, objek, catatan, is_kredit=Fal
     # atas -- selama uangnya keluar, anggap sebagai belanja operasional
     # biasa daripada dibiarkan sebagai label transfer mentah
     if new_kategori.strip().upper() in GENERIC_UNRESOLVED_CATEGORIES and not is_kredit:
-        new_kategori = 'OpEx'
+        new_kategori = 'Belanja Operasional'
 
     # tarik nama tenant dari pola "Belanja <Karyawan> [Vendor] – Item" kalau
     # belum kena aturan spesifik apa pun di atas (mis. Dinda Frozen, Abadi --
@@ -229,7 +239,7 @@ def _apply_keyword_overrides(keterangan, kategori, objek, catatan, is_kredit=Fal
             if item and vendor.upper() != 'COD' and vendor_matches_objek:
                 new_keterangan = item
 
-    if (new_kategori.strip().lower().startswith('belanja') or new_kategori in ('Overhead', 'OpEx')) and (not new_objek or new_objek == '-'):
+    if (new_kategori.strip().lower().startswith('belanja') or new_kategori == 'Overhead') and (not new_objek or new_objek == '-'):
         new_objek = 'Tenant Lain'
 
     return new_keterangan, new_kategori, new_objek
@@ -432,7 +442,7 @@ def build_rows(xlsx_path, sheet_name=None):
                 m_v = VENDOR_ITEM_RE.match(main_item)
                 vendor_guess = m_v.group(1).strip() if m_v else (objek if objek and objek != '-' else None)
                 item_only = m_v.group(2).strip() if m_v else main_item
-                ket1, kat1, obj1 = _apply_keyword_overrides(main_item, kategori, objek, catatan, is_kredit=False)
+                ket1, kat1, obj1 = _apply_keyword_overrides(main_item, kategori, objek, catatan, is_kredit=False, debit=main_amt)
                 _emit({
                     'tanggal': tgl_str, 'keterangan': ket1, 'kategori': kat1,
                     'debit': main_amt, 'kredit': None, 'saldo': None,
@@ -447,14 +457,14 @@ def build_rows(xlsx_path, sheet_name=None):
                     'catatan': f'Estimasi harga Es Batu (~Rp{ES_BATU_ESTIMATE:,.0f}), dipecah dari: {keterangan}',
                 })
                 _emit({
-                    'tanggal': tgl_str, 'keterangan': 'Parkir', 'kategori': 'OpEx',
+                    'tanggal': tgl_str, 'keterangan': 'Parkir', 'kategori': 'Belanja Operasional',
                     'debit': -PARKIR_AMOUNT, 'kredit': None, 'saldo': saldo,
                     'subjek': subjek, 'objek': 'Tenant Lain',
                     'catatan': f'Dipecah dari: {keterangan}',
                 })
             else:
                 base_amt = debit + PARKIR_AMOUNT
-                ket1, kat1, obj1 = _apply_keyword_overrides(base_desc, kategori, objek, catatan, is_kredit=False)
+                ket1, kat1, obj1 = _apply_keyword_overrides(base_desc, kategori, objek, catatan, is_kredit=False, debit=base_amt)
                 if obj1 == 'Tenant Lain' and not VENDOR_ITEM_RE.match(base_desc) and not re.match(r'^BELANJA\s+', base_desc, re.I):
                     # base_desc cuma nama vendor polos tanpa rincian item, mis. "Fadhilah"
                     obj1 = base_desc
@@ -465,7 +475,7 @@ def build_rows(xlsx_path, sheet_name=None):
                     'catatan': f'Dipecah dari: {keterangan}',
                 })
                 _emit({
-                    'tanggal': tgl_str, 'keterangan': 'Parkir', 'kategori': 'OpEx',
+                    'tanggal': tgl_str, 'keterangan': 'Parkir', 'kategori': 'Belanja Operasional',
                     'debit': -PARKIR_AMOUNT, 'kredit': None, 'saldo': saldo,
                     'subjek': subjek, 'objek': 'Tenant Lain',
                     'catatan': f'Dipecah dari: {keterangan}',
@@ -473,7 +483,7 @@ def build_rows(xlsx_path, sheet_name=None):
             continue
 
         keterangan, kategori, objek = _apply_keyword_overrides(
-            keterangan, kategori, objek, catatan, is_kredit=(kredit is not None)
+            keterangan, kategori, objek, catatan, is_kredit=(kredit is not None), debit=debit
         )
 
         if kategori == 'Penjualan':
