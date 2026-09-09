@@ -204,6 +204,13 @@ def _apply_learned_overrides(keterangan, kategori, objek, catatan, debit, kredit
     ob = objek or ''
     cat_text = catatan or ''
 
+    # Pengeluaran Pribadi (owner) -- penanda eksplisit, prioritas tertinggi.
+    # Begitu ketemu, TIDAK ADA aturan kategori lain yang boleh menimpa lagi
+    # (kategori sudah di-set 'Pengeluaran Pribadi' oleh categorize() sebelum
+    # ini dipanggil) -- keterangan/objek juga dibiarkan apa adanya.
+    if kategori == 'Pengeluaran Pribadi':
+        return keterangan, kategori, objek
+
     # baris yang SUDAH benar terdeteksi sebagai biaya admin/bunga bank
     # tidak boleh ditimpa oleh aturan merchant/orang di bawah -- kadang
     # field "objek" mentah dari bank untuk baris potongan biaya berisi
@@ -212,11 +219,6 @@ def _apply_learned_overrides(keterangan, kategori, objek, catatan, debit, kredit
     # diseragamkan jadi "Biaya Admin" (termasuk yang tadinya "Bunga Bank")
     if kategori == 'Biaya Admin & Pajak Bank':
         return 'Biaya Admin', kategori, objek
-
-    # belanja/pembayaran pribadi (di luar Stoa) -- dipisah dari
-    # rekonsiliasi bisnis, jadi keterangan+kategori diseragamkan
-    if kategori == 'Belanja Pribadi':
-        return 'Belanja Pribadi', kategori, objek
 
     if AUTOCR_RE.search(cat_text):
         return 'Setoran Tunai', 'Transaksi Internal', objek
@@ -359,7 +361,7 @@ CATEGORIES_REFERENCE = [
     'Penarikan',
     'Penerimaan',
     'Pembayaran Hutang',
-    'Belanja Pribadi',
+    'Pengeluaran Pribadi',
     'Modal & Setoran Pemilik',
     'Pindah Rekening Internal',
     'Transaksi Internal',
@@ -396,7 +398,7 @@ RECON_KNOWN_CATEGORIES = {
     'Penarikan',
     'Penerimaan',
     'Pembayaran Hutang',
-    'Belanja Pribadi',
+    'Pengeluaran Pribadi',
     'Pindah Rekening Internal',
     'Pindang Rekening Internal',
     'Transfer Internal',
@@ -500,10 +502,13 @@ def categorize(keterangan, objek, catatan, debit, kredit):
 
 
 def _categorize_raw(ket, ob, text, debit, kredit):
+    # Pengeluaran Pribadi (owner) -- penanda eksplisit wajib diketik manual,
+    # dicek PALING PERTAMA sebelum aturan kategori apa pun yang lain, karena
+    # nominal/vendor-nya sendiri tidak bisa dibedakan dari transaksi bisnis.
+    if any(k in text for k in ('PRIBADI', 'PERSONAL', 'BUAT SENDIRI')):
+        return 'Pengeluaran Pribadi'
     if ket == 'SALDO AWAL':
         return 'Saldo Awal'
-    if 'BELANJA PRIBADI' in text or 'PEMBAYARAN PRIBADI' in text:
-        return 'Belanja Pribadi'
     if ket in ('BUNGA', 'BUNGA BANK', 'PAJAK BUNGA', 'BIAYA ADMIN', 'BIAYA ADM', 'ADMIN TRANSFER',
                'INTEREST ON ACCOUNT', 'MINIMUM BALANCE FEE', 'CR KOREKSI BUNGA'):
         return 'Biaya Admin & Pajak Bank'
