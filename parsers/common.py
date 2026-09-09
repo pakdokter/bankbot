@@ -578,11 +578,11 @@ def _categorize_raw(ket, ob, text, debit, kredit):
     # dari transfer bank biasa yang tidak dikenal (tetap Belanja Operasional)
     if debit and 'QRIS' in ket:
         return 'Belanja Bahan'
-    # kategori generik yang belum kena aturan spesifik apa pun -- selama
-    # uangnya keluar, anggap belanja operasional biasa dulu daripada
-    # dibiarkan tak terkategori terus
+    # kategori generik yang belum kena aturan spesifik apa pun -- benar-benar
+    # tidak ada info yang bisa mengelompokkannya ke kategori OpEx yang lebih
+    # spesifik, jadi langsung masuk Overhead daripada dibiarkan generik terus
     if debit:
-        return 'Belanja Operasional'
+        return 'Overhead'
     return ''
 
 
