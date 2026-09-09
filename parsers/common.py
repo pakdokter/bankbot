@@ -116,7 +116,7 @@ OBJEK_KNOWN_MAP = [
     (r'SUKANDA\s*JAYA', 'Belanja UHT', 'Belanja Bahan', None),
     (r'SAFWAN\s*HARIADI', 'Belanja Bahan', 'Belanja Bahan', None),
     (r'SEAKUN\.?ID', 'Bayar Layanan', 'Belanja Bahan', None),
-    (r'YULIA\s*INDAH\s*PRATIW', 'Belanja Plastik', 'OpEx', None),
+    (r'YULIA\s*INDAH\s*PRATIW', 'Belanja Plastik', 'Belanja Operasional', None),
     (r'MEILINA\s*PUSPITASAR', 'Belanja Bahan', 'Belanja Bahan', None),
     (r'LUSIANA\s*VALUFI', 'Belanja Pasar', 'Belanja Bahan', None),
     (r'RIZKY\s*TRIE\s*ADHI', 'Listrik', 'Overhead', None),
@@ -128,7 +128,7 @@ OBJEK_KNOWN_MAP = [
     (r'TOKO\s*SURYA', 'Belanja Bahan', 'Belanja Bahan', None),
     (r'MUH\s*YANI', 'Pembayaran Hutang', 'Pembayaran Hutang', None),
     (r'SITI\s*HUMAIRO', 'Ayam', 'Belanja Bahan', None),
-    (r'YUSRAN\s*FAILANI', 'Belanja Cleo', 'OpEx', None),
+    (r'YUSRAN\s*FAILANI', 'Belanja Galon', 'Belanja Bahan', None),
 ]
 OBJEK_KNOWN_MAP = [(re.compile(pat, re.I), ket, kat, obj) for pat, ket, kat, obj in OBJEK_KNOWN_MAP]
 
@@ -143,7 +143,7 @@ PERSON_KNOWN_MAP = [(re.compile(pat, re.I), ket, kat, obj) for pat, ket, kat, ob
 
 CATATAN_KNOWN_MAP = [
     (r'TIKTOK', 'Iklan Tiktok', 'Marketing', None),
-    (r'BELI\s*MASKER|\bMASKER\b', 'Beli Masker', 'OpEx', 'Tenant Lain'),
+    (r'BELI\s*MASKER|\bMASKER\b', 'Beli Masker', 'Belanja Operasional', 'Tenant Lain'),
     (r'BELANJA\s*PASAR', 'Belanja Pasar', 'Belanja Bahan', None),
     (r'\bLISTRIK\b', 'Listrik', 'Overhead', None),
 ]
@@ -158,8 +158,9 @@ KETERANGAN_SIMPLIFY_MAP = [
     (r'PHOTOBOOTH', 'Penjualan Photobooth', 'Penjualan'),
     (r'KANTONG\s*WIDIA', 'Belanja Widia', 'Belanja Bahan'),
     (r'KANTONG\s*KURNIA', 'Belanja Kurnia', 'Belanja Bahan'),
-    (r'ES\s*BATU', 'Es Batu', 'OpEx'),
+    (r'ES\s*BATU', 'Es Batu', 'Belanja Operasional'),
     (r'RISOL', 'Risol', 'Belanja Bahan'),
+    (r'\bCLEO\b|\bGALON\b|AIR\s*MINUM', 'Belanja Galon', 'Belanja Bahan'),
 ]
 KETERANGAN_SIMPLIFY_MAP = [(re.compile(pat, re.I), ket, kat) for pat, ket, kat in KETERANGAN_SIMPLIFY_MAP]
 PARKIR_KECIL_RE = re.compile(r'PARKIR', re.I)
@@ -257,7 +258,7 @@ def _apply_learned_overrides(keterangan, kategori, objek, catatan, debit, kredit
 
     # parkir kecil (<Rp10.000) -- selalu disederhanakan, apa pun teks aslinya
     if PARKIR_KECIL_RE.search(keterangan) and debit is not None and abs(debit) < 10000:
-        return 'Parkir', 'OpEx', objek
+        return 'Parkir', 'Belanja Operasional', objek
 
     for pattern, ket, kat in KETERANGAN_SIMPLIFY_MAP:
         if pattern.search(keterangan):
@@ -267,7 +268,7 @@ def _apply_learned_overrides(keterangan, kategori, objek, catatan, debit, kredit
         return 'Transaksi Internal', 'Transaksi Internal', objek
 
     if keterangan in GENERIC_KETERANGAN_LABELS.union({'Penjualan QRIS'}) and (
-        kategori in ('Belanja Operasional', 'Overhead', 'OpEx', 'Belanja Bahan', 'Penjualan')
+        kategori in ('Belanja Operasional', 'Overhead', 'Belanja Bahan', 'Penjualan')
     ):
         return kategori, kategori, objek
 
@@ -284,6 +285,9 @@ DEBT_KEYWORDS = ('CICILAN', 'ANGSURAN', 'BAYAR SB', 'PINJAM', 'UTANG')
 UTILITY_KEYWORDS = ('SEWA', 'LISTRIK', ' PLN', 'AIR STO', 'UTILITAS')
 WALLET_KEYWORDS = ('SHOPEE', 'OVO ', ' OVO', 'GOPAY', 'DANA ', 'TELKOMSEL', 'TOP UP', 'ISI SALDO', 'PULSA', 'BRIVA')
 PURCHASE_KEYWORDS = ('BELANJA', 'BELI ', 'ONGKIR', 'SUPPLIER', 'GANTI UANG BELANJA')
+# furniture/mesin/tools -- nominalnya yang menentukan Belanja Assets (CapEx)
+# vs belanja tools/alat kerja biasa (lihat _categorize_raw)
+ASSET_KEYWORDS = ('FURNITURE', 'MESIN', 'TOOLS', 'PERALATAN', 'MEUBEL', 'KULKAS', 'FREEZER')
 PAYROLL_KEYWORDS = ('GAJI',)
 TRANSFER_TYPES = ('TRANSFER', 'TRSF', 'BI-FAST', 'SWITCHING', 'KIRIM')
 
@@ -349,9 +353,8 @@ CATEGORIES_REFERENCE = [
     'Penjualan',
     'Belanja Bahan',
     'Belanja Konsumsi',
-    'Belanja Operasional',  # LAMA -- masih dikenali untuk data historis, tidak dipakai lagi untuk data baru
+    'Belanja Operasional',
     'Overhead',
-    'OpEx',
     'Marketing',
     'Reparasi',
     'Belanja Assets',
@@ -377,16 +380,18 @@ CATEGORIES_REFERENCE = [
 # Kategori "Gaji*" pakai wildcard karena reconbot sendiri menerima variasi
 # label Gaji (Bulan Ini/Accrual/nama bulan spesifik) via jaring pengaman
 # terpisah -- bukan berarti boleh bebas, tapi harus tetap diawali "Gaji ".
-# "Belanja Operasional" dipertahankan di sini supaya data LAMA yang sudah
-# terlanjur pakai kategori itu tetap tervalidasi -- data BARU sekarang
-# selalu menghasilkan "Overhead" (biaya tetap) atau "OpEx" (biaya variabel).
+# Ini semua kategori LAYER 1 -- bot konversi ini TIDAK PERNAH menulis
+# "OpEx"/"CapEx" langsung ke kolom Kategori; itu di-roll-up di reconbot
+# dari kategori Layer 1 di sini (mis. Gaji Bulan Ini & Belanja Operasional
+# & Overhead -> OpEx, Belanja Assets -> CapEx). "OpEx" sengaja TIDAK
+# dimasukkan di sini supaya kalau ada yang lolos jadi "OpEx", otomatis
+# ketahuan sebagai "New Kategori", bukan diam-diam dianggap valid.
 RECON_KNOWN_CATEGORIES = {
     'Saldo Awal',
     'Penjualan',
     'Belanja Bahan',
     'Belanja Operasional',
     'Overhead',
-    'OpEx',
     'Belanja Konsumsi',
     'Marketing',
     'Reparasi',
@@ -545,7 +550,7 @@ def _categorize_raw(ket, ob, text, debit, kredit):
     if 'TARIK TUNAI' in text or ('SETOR' in text and 'SETORAN' not in ket):
         return 'Modal & Setoran Pemilik'
     if 'TARIKAN' in text and 'ATM' in text:
-        return 'OpEx'
+        return 'Belanja Operasional'
 
     if any(k in text for k in DEBT_KEYWORDS):
         return 'Pembayaran Hutang'
@@ -556,23 +561,28 @@ def _categorize_raw(ket, ob, text, debit, kredit):
     # dompet digital/pulsa lainnya lewat BRIVA
     if 'BRIVA' in text and debit and 900000 <= abs(debit) <= 1100000:
         return 'Overhead'
+    # furniture/mesin/tools -- di atas Rp500rb dianggap aset (Belanja
+    # Assets/CapEx), di bawah itu cuma belanja tools/alat kerja biasa
+    if any(k in text for k in ASSET_KEYWORDS):
+        if debit and abs(debit) >= 500000:
+            return 'Belanja Assets'
+        return 'Belanja Operasional'
     if any(k in text for k in WALLET_KEYWORDS):
-        return 'OpEx'
+        return 'Belanja Operasional'
     if any(k in text for k in PURCHASE_KEYWORDS):
-        return 'OpEx'
+        return 'Belanja Operasional'
     if any(k in ket for k in TRANSFER_TYPES):
-        return 'OpEx' if debit else 'Transfer Lainnya'
+        return 'Belanja Operasional' if debit else 'Transfer Lainnya'
     # QRIS ke merchant yang tidak dikenal diasumsikan belanja bahan baku
     # (kebanyakan transaksi QRIS harian Stoa memang belanja dapur), beda
-    # dari transfer bank biasa yang tidak dikenal (tetap OpEx)
+    # dari transfer bank biasa yang tidak dikenal (tetap Belanja Operasional)
     if debit and 'QRIS' in ket:
         return 'Belanja Bahan'
     # kategori generik yang belum kena aturan spesifik apa pun -- selama
-    # uangnya keluar dan belum jelas rutin/tetapnya, anggap OpEx (biaya
-    # variabel) dulu, bukan Overhead -- Overhead cuma untuk yang memang
-    # jelas biaya tetap terjadwal
+    # uangnya keluar, anggap belanja operasional biasa dulu daripada
+    # dibiarkan tak terkategori terus
     if debit:
-        return 'OpEx'
+        return 'Belanja Operasional'
     return ''
 
 
