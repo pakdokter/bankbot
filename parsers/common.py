@@ -130,6 +130,11 @@ OBJEK_KNOWN_MAP = [
     (r'MUH\s*YANI', 'Pembayaran Hutang', 'Pembayaran Hutang', None),
     (r'SITI\s*HUMAIRO', 'Ayam', 'Belanja Bahan', None),
     (r'YUSRAN\s*FAILANI', 'Belanja Galon', 'Belanja Bahan', None),
+    (r'BADAN\s*PENDAPATAN\s*D.*KBB|BADAN\s*PENDAPATAN\s*DAERAH', 'PB1 Bulan Sebelumnya', 'Pajak Daerah', None),
+    (r'AIRPAY\s*INTERNATION', None, 'Penjualan Shopeefood', 'Penjualan'),
+    (r'VISIONET', 'Penjualan Grab', None, 'Penjualan'),
+    (r'\bOVO\b', None, 'Belanja Konsumsi', None),
+    (r'M\s*ZULFIAN\s*KURNIASA', 'Penjualan Photobooth', 'Penjualan', None),
 ]
 OBJEK_KNOWN_MAP = [(re.compile(pat, re.I), ket, kat, obj) for pat, ket, kat, obj in OBJEK_KNOWN_MAP]
 
@@ -159,9 +164,16 @@ KETERANGAN_SIMPLIFY_MAP = [
     (r'PHOTOBOOTH', 'Penjualan Photobooth', 'Penjualan'),
     (r'KANTONG\s*WIDIA', 'Belanja Widia', 'Belanja Bahan'),
     (r'KANTONG\s*KURNIA', 'Belanja Kurnia', 'Belanja Bahan'),
-    (r'ES\s*BATU', 'Es Batu', 'Belanja Operasional'),
-    (r'RISOL', 'Risol', 'Belanja Bahan'),
+    (r'ES\s*BATU', 'Es Batu', 'Belanja Bahan'),
+    (r'PANGSIT|RISOL', 'Pangsit dan Risol', 'Belanja Bahan'),
     (r'\bCLEO\b|\bGALON\b|AIR\s*MINUM', 'Belanja Galon', 'Belanja Bahan'),
+    (r'ONGKIR|ONGKOS\s*KIRIM|GERUZ+', 'Ongkir', 'Penjualan'),
+    (r'PARKIR', 'Parkir', 'OpEx'),
+    (r'BAWANG\s*MERAH', 'Bawang Merah', 'Belanja Bahan'),
+    (r'BAWANG\s*PUTIH', 'Bawang Putih', 'Belanja Bahan'),
+    (r'\bCABE\b|\bCABAI\b', 'Cabe', 'Belanja Bahan'),
+    (r'\bTELUR\b', 'Telur', 'Belanja Bahan'),
+    (r'\bBERAS\b', 'Beras', 'Belanja Bahan'),
 ]
 KETERANGAN_SIMPLIFY_MAP = [(re.compile(pat, re.I), ket, kat) for pat, ket, kat in KETERANGAN_SIMPLIFY_MAP]
 PARKIR_KECIL_RE = re.compile(r'PARKIR', re.I)
@@ -256,10 +268,6 @@ def _apply_learned_overrides(keterangan, kategori, objek, catatan, debit, kredit
             new_kat = kat if kat else kategori
             new_obj = obj_override if obj_override else objek
             return new_ket, new_kat, new_obj
-
-    # parkir kecil (<Rp10.000) -- selalu disederhanakan, apa pun teks aslinya
-    if PARKIR_KECIL_RE.search(keterangan) and debit is not None and abs(debit) < 10000:
-        return 'Parkir', 'Belanja Operasional', objek
 
     for pattern, ket, kat in KETERANGAN_SIMPLIFY_MAP:
         if pattern.search(keterangan):
@@ -366,6 +374,8 @@ CATEGORIES_REFERENCE = [
     'Penerimaan',
     'Pembayaran Hutang',
     'Pengeluaran Pribadi',
+    'Pajak Daerah',
+    'Penjualan Shopeefood',
     'Modal & Setoran Pemilik',
     'Pindah Rekening Internal',
     'Transaksi Internal',
@@ -390,6 +400,7 @@ CATEGORIES_REFERENCE = [
 RECON_KNOWN_CATEGORIES = {
     'Saldo Awal',
     'Penjualan',
+    'OpEx',  # pengecualian eksplisit: "Parkir" sengaja tetap ditulis OpEx
     'Belanja Bahan',
     'Belanja Operasional',
     'Overhead',
@@ -405,6 +416,8 @@ RECON_KNOWN_CATEGORIES = {
     'Penerimaan',
     'Pembayaran Hutang',
     'Pengeluaran Pribadi',
+    'Pajak Daerah',
+    'Penjualan Shopeefood',
     'Pindah Rekening Internal',
     'Pindang Rekening Internal',
     'Transfer Internal',
