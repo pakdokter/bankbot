@@ -1,3 +1,4 @@
+import datetime
 import os
 import re
 from openpyxl import Workbook, load_workbook
@@ -665,6 +666,28 @@ def _ensure_no_blank_fields(r, self_code=''):
         r['objek'] = self_code or '-'
 
 
+def _parse_tanggal(v):
+    """Kolom Tanggal ditulis sebagai objek date beneran (bukan teks) supaya
+    Excel mengenalinya sebagai tipe Date sungguhan -- bisa diurutkan,
+    difilter berdasarkan tanggal, dipakai rumus tanggal, dll. Semua parser
+    membangun tanggal sebagai string 'dd/mm/yyyy' secara internal; ini
+    dikonversi di titik penulisan akhir supaya parser-parser itu sendiri
+    tidak perlu diubah satu-satu."""
+    if v is None or isinstance(v, (datetime.date, datetime.datetime)):
+        return v
+    s = str(v).strip()
+    m = re.match(r'^(\d{1,2})/(\d{1,2})/(\d{2,4})$', s)
+    if not m:
+        return v  # bukan format yang dikenal -- biarkan apa adanya (fallback aman)
+    d, mo, y = (int(x) for x in m.groups())
+    if y < 100:
+        y += 2000
+    try:
+        return datetime.date(y, mo, d)
+    except ValueError:
+        return v
+
+
 def populate_sheet(ws, rows, self_code='', entity_code_map=None, saldo_awal=None, saldo_akhir=None):
     """Fills one worksheet with the standard 9-column layout: header, an
     optional opening-balance row, all transaction rows, and a closing
@@ -704,7 +727,7 @@ def populate_sheet(ws, rows, self_code='', entity_code_map=None, saldo_awal=None
         if kredit:
             total_kredit += kredit
         ws.append([
-            r['tanggal'], r['keterangan'], r.get('kategori', ''),
+            _parse_tanggal(r['tanggal']), r['keterangan'], r.get('kategori', ''),
             debit, kredit, r.get('saldo'),
             r.get('subjek', ''), r.get('objek', ''), r.get('catatan', ''),
         ])
@@ -731,6 +754,8 @@ def populate_sheet(ws, rows, self_code='', entity_code_map=None, saldo_awal=None
             cell.border = CELL_BORDER
             if is_alt:
                 cell.fill = ALT_ROW_FILL
+        if isinstance(row[0].value, (datetime.date, datetime.datetime)):
+            row[0].number_format = 'DD/MM/YYYY'
 
     for r_idx in anchor_rows:
         for cell in ws[r_idx]:
