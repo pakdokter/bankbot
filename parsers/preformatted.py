@@ -134,7 +134,7 @@ def _apply_keyword_overrides(keterangan, kategori, objek, catatan, is_kredit=Fal
     if PARKIR_EXACT_RE.match(keterangan.strip()):
         # parkir tidak pernah terkait tenant/vendor transaksi sebelumnya --
         # objek selalu dinetralkan, apa pun yang kebetulan ada di kolom itu
-        return keterangan, 'Belanja Operasional', 'Tenant Lain'
+        return 'Parkir', 'OpEx', 'Tenant Lain'
 
     gaji = match_gaji(keterangan)
     if gaji:
@@ -173,6 +173,23 @@ def _apply_keyword_overrides(keterangan, kategori, objek, catatan, is_kredit=Fal
     GALON_RE_LOCAL = re.compile(r'\bCLEO\b|\bGALON\b|AIR\s*MINUM', re.I)
     if GALON_RE_LOCAL.search(text):
         return 'Belanja Galon', 'Belanja Bahan', objek
+
+    if re.search(r'PANGSIT|RISOL', text, re.I):
+        return 'Pangsit dan Risol', 'Belanja Bahan', objek
+    if re.search(r'ES\s*BATU', text, re.I):
+        return 'Es Batu', 'Belanja Bahan', objek
+    if re.search(r'ONGKIR|ONGKOS\s*KIRIM|GERUZ+', text, re.I):
+        return 'Ongkir', 'Penjualan', objek
+    if re.search(r'BAWANG\s*MERAH', text, re.I):
+        return 'Bawang Merah', 'Belanja Bahan', objek
+    if re.search(r'BAWANG\s*PUTIH', text, re.I):
+        return 'Bawang Putih', 'Belanja Bahan', objek
+    if re.search(r'\bCABE\b|\bCABAI\b', text, re.I):
+        return 'Cabe', 'Belanja Bahan', objek
+    if re.search(r'\bTELUR\b', text, re.I):
+        return 'Telur', 'Belanja Bahan', objek
+    if re.search(r'\bBERAS\b', text, re.I):
+        return 'Beras', 'Belanja Bahan', objek
 
     ASSET_RE_LOCAL = re.compile(r'FURNITURE|MESIN|TOOLS|PERALATAN|MEUBEL|KULKAS|FREEZER', re.I)
     if ASSET_RE_LOCAL.search(text):
@@ -457,7 +474,7 @@ def build_rows(xlsx_path, sheet_name=None):
                     'catatan': f'Estimasi harga Es Batu (~Rp{ES_BATU_ESTIMATE:,.0f}), dipecah dari: {keterangan}',
                 })
                 _emit({
-                    'tanggal': tgl_str, 'keterangan': 'Parkir', 'kategori': 'Belanja Operasional',
+                    'tanggal': tgl_str, 'keterangan': 'Parkir', 'kategori': 'OpEx',
                     'debit': -PARKIR_AMOUNT, 'kredit': None, 'saldo': saldo,
                     'subjek': subjek, 'objek': 'Tenant Lain',
                     'catatan': f'Dipecah dari: {keterangan}',
@@ -475,7 +492,7 @@ def build_rows(xlsx_path, sheet_name=None):
                     'catatan': f'Dipecah dari: {keterangan}',
                 })
                 _emit({
-                    'tanggal': tgl_str, 'keterangan': 'Parkir', 'kategori': 'Belanja Operasional',
+                    'tanggal': tgl_str, 'keterangan': 'Parkir', 'kategori': 'OpEx',
                     'debit': -PARKIR_AMOUNT, 'kredit': None, 'saldo': saldo,
                     'subjek': subjek, 'objek': 'Tenant Lain',
                     'catatan': f'Dipecah dari: {keterangan}',
