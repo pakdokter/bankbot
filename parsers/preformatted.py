@@ -39,15 +39,13 @@ KEYWORD_RULES = [
     (r'BEANS', 'Belanja Bahan', None),
     (r'SHOPEE', 'Belanja Bahan', 'Shopee'),
     (r'SINAR BAHAGIA', 'Belanja Bahan', 'Sinar Bahagia'),
-    (r'KONSUMSI', 'Belanja Konsumsi', None),
     (r'\bWEB\b', 'Overhead', None),
     (r'UTILITIES', 'Overhead', None),
     (r'SPOTIFY', 'Overhead', None),
-    (r'TELKOM', 'Overhead', None),
     (r'MR\s*DIY', None, 'MR DIY'),
-    (r'PELATIHAN', 'Riset dan Pengembangan', None),
     (r'TARIKAN?\s*ATM', 'Belanja Operasional', None),
     (r'INDOMARET', None, 'Indomaret'),
+    (r'MASUYA\s*GRAHA\s*TRIKE', 'Belanja Bahan', 'Masuya'),
     (r'MASUYA', None, 'Masuya'),
     (r'ANUGERAH', None, 'Anugerah'),
     (r'AMANAH', 'Belanja Bahan', 'Amanah'),
@@ -57,8 +55,48 @@ KEYWORD_RULES = [
     (r'FADHILAH', 'Belanja Bahan', 'Fadhilah'),
     (r'MAK\s*OPIK|MAH\s*OPIK', 'Belanja Bahan', 'Mak Opik'),
     (r'PASAR\s*PANCOR|\bPASAR\b', 'Belanja Bahan', 'Pasar'),
+    (r'DEPO\s*BANGUNAN|MITRA\s*10|TOKO\s*BANGUNAN', 'Sewa dan Mantenantce Bangunan', None),
+    (r'NANDA\s*AUDIA\s*AGUSTIN', 'Kemasan', 'Plastik Kliffer'),
 ]
 KEYWORD_RULES = [(re.compile(pat, re.I), kat, obj) for pat, kat, obj in KEYWORD_RULES]
+
+# provider layanan langganan bulanan -- keterangan dinamis "Biaya Layanan
+# <Provider>", kategori seragam "Subscription"
+SUBSCRIPTION_PROVIDERS = [
+    (re.compile(r'SEAKUN\.?ID', re.I), 'Seakun.id'),
+    (re.compile(r'\bAPPLE\b', re.I), 'Apple'),
+    (re.compile(r'\bADOBE\b', re.I), 'Adobe'),
+]
+
+ITEM_SIMPLIFY_MAP = [
+    (r'PANGSIT|RISOL', 'Pangsit dan Risol', 'Belanja Bahan'),
+    (r'ONGKIR|ONGKOS\s*KIRIM|GERUZ+', 'Ongkir', 'Penjualan'),
+    (r'PARKIR', 'Parkir', 'Overhead'),
+    (r'BAWANG\s*MERAH', 'Bawang Merah', 'Belanja Bahan'),
+    (r'BAWANG\s*PUTIH', 'Bawang Putih', 'Belanja Bahan'),
+    (r'\bCABE\b|\bCABAI\b', 'Cabe', 'Belanja Bahan'),
+    (r'\bTELUR\b', 'Telur', 'Belanja Bahan'),
+    (r'\bBERAS\b', 'Beras', 'Belanja Bahan'),
+    (r'STIKER|STICKER|\bPRINT\b|\bCETAK\b|SABLON', 'Penyetakan', 'Overhead'),
+    (r'\bTIPS?\b|\bMINUS\b|\bLEBIH\b', 'Tip/Minus/Lebih', 'Tip/Minus/Lebih'),
+    (r'RISET\s*MENU|\bRISET\b|PELATIHAN|TRAINING', 'Riset dan Pelatihan', 'Riset dan Development'),
+    (r'SETORAN\s*VIA\s*CDM', 'Setoran Tunai', 'Transaksi Internal'),
+    (r'PEMINDAHBUKUAN|TRANSFER\s*INTERNAL', 'Transaksi Internal', 'Transaksi Internal'),
+    (r'\bPLASTIK\b', 'Plastik', 'Kemasan'),
+    (r'SEWA\s*BANGUNAN', 'Sewa Bangunan', 'Sewa dan Mantenantce Bangunan'),
+    (r'RENOVASI\s*BANGUNAN|BIAYA\s*TUKANG|ONGKOS\s*TUKANG|BAHAN\s*BANGUNAN|RENOVASI\s*KABEL|'
+     r'\bKABEL\b|\bLAMPU\b|\bTOREN\b|\bBESI\b|\bKERAMIK\b|\bPIPA\b|WESTAFEL|\bWC\b|\bKERAN\b',
+     'Renovasi Bangunan', 'Sewa dan Mantenantce Bangunan'),
+    (r'\bPULSA\b|MY\s*TELKOMSEL|PULSA\s*SIMPATI|TELKOM', 'Pulsa dan Internet', 'Belanja Utilitas'),
+    (r'AIR\s*PDAM|\bPDAM\b', 'Air PDAM', 'Belanja Utilitas'),
+    (r'\bLISTRIK\b', 'Listrik', 'Belanja Utilitas'),
+]
+ITEM_SIMPLIFY_MAP = [(re.compile(pat, re.I), ket, kat) for pat, ket, kat in ITEM_SIMPLIFY_MAP]
+KONSUMSI_UMUM_RE = re.compile(r'\bKONSUMSI\b', re.I)
+TOOLS_EQUIPMENT_RE = re.compile(r'BELANJA\s*TOOLS|\bTOOLS\b', re.I)
+HUTANG_MASUK_RE = re.compile(r'\bHUTANG\b|\bPINJAM(?:AN)?\b', re.I)
+HUTANG_BAYAR_RE = re.compile(
+    r'BAYAR\s*HUTANG|BAYAR\s*PINJAM(?:AN)?|CICILAN\s*HUTANG|CICILAN\s*PINJAM(?:AN)?', re.I)
 
 KONSUMSI_RE = re.compile(r'KONSUMSI', re.I)
 PENJUALAN_RE = re.compile(r'PENJUALAN', re.I)
@@ -134,7 +172,7 @@ def _apply_keyword_overrides(keterangan, kategori, objek, catatan, is_kredit=Fal
     if PARKIR_EXACT_RE.match(keterangan.strip()):
         # parkir tidak pernah terkait tenant/vendor transaksi sebelumnya --
         # objek selalu dinetralkan, apa pun yang kebetulan ada di kolom itu
-        return 'Parkir', 'OpEx', 'Tenant Lain'
+        return 'Parkir', 'Overhead', 'Tenant Lain'
 
     gaji = match_gaji(keterangan)
     if gaji:
@@ -174,30 +212,31 @@ def _apply_keyword_overrides(keterangan, kategori, objek, catatan, is_kredit=Fal
     if GALON_RE_LOCAL.search(text):
         return 'Belanja Galon', 'Belanja Bahan', objek
 
-    if re.search(r'PANGSIT|RISOL', text, re.I):
-        return 'Pangsit dan Risol', 'Belanja Bahan', objek
-    if re.search(r'ES\s*BATU', text, re.I):
-        return 'Es Batu', 'Belanja Bahan', objek
-    if re.search(r'ONGKIR|ONGKOS\s*KIRIM|GERUZ+', text, re.I):
-        return 'Ongkir', 'Penjualan', objek
-    if re.search(r'BAWANG\s*MERAH', text, re.I):
-        return 'Bawang Merah', 'Belanja Bahan', objek
-    if re.search(r'BAWANG\s*PUTIH', text, re.I):
-        return 'Bawang Putih', 'Belanja Bahan', objek
-    if re.search(r'\bCABE\b|\bCABAI\b', text, re.I):
-        return 'Cabe', 'Belanja Bahan', objek
-    if re.search(r'\bTELUR\b', text, re.I):
-        return 'Telur', 'Belanja Bahan', objek
-    if re.search(r'\bBERAS\b', text, re.I):
-        return 'Beras', 'Belanja Bahan', objek
+    for provider_re, provider_name in SUBSCRIPTION_PROVIDERS:
+        if provider_re.search(text):
+            return f'Biaya Layanan {provider_name}', 'Subscription', objek
 
-    ASSET_RE_LOCAL = re.compile(r'FURNITURE|MESIN|TOOLS|PERALATAN|MEUBEL|KULKAS|FREEZER', re.I)
+    if HUTANG_MASUK_RE.search(text) and not HUTANG_BAYAR_RE.search(text) and is_kredit:
+        pemberi = objek if objek and objek not in ('-', '') else 'Tidak Diketahui'
+        return f'Hutang Baru - {pemberi}', 'Hutang Masuk', objek
+
+    if TOOLS_EQUIPMENT_RE.search(keterangan):
+        return keterangan, 'Tools dan Equipments', objek
+
+    if KONSUMSI_UMUM_RE.search(text):
+        return 'Konsumsi', 'Konsumsi dan Liburan', objek
+
+    for pattern, ket, kat in ITEM_SIMPLIFY_MAP:
+        if pattern.search(text):
+            return ket, kat, objek
+
+    ASSET_RE_LOCAL = re.compile(r'FURNITURE|MESIN|MEUBEL|KULKAS|FREEZER', re.I)
     if ASSET_RE_LOCAL.search(text):
         if debit is not None and abs(debit) >= 500000:
             return keterangan, 'Belanja Assets', objek
         return keterangan, 'Belanja Operasional', objek
 
-    new_keterangan = 'Belanja Konsumsi' if KONSUMSI_RE.search(text) else keterangan
+    new_keterangan = keterangan
     new_kategori, new_objek = kategori, objek
     for pattern, kat, obj in KEYWORD_RULES:
         if pattern.search(text):
@@ -474,7 +513,7 @@ def build_rows(xlsx_path, sheet_name=None):
                     'catatan': f'Estimasi harga Es Batu (~Rp{ES_BATU_ESTIMATE:,.0f}), dipecah dari: {keterangan}',
                 })
                 _emit({
-                    'tanggal': tgl_str, 'keterangan': 'Parkir', 'kategori': 'OpEx',
+                    'tanggal': tgl_str, 'keterangan': 'Parkir', 'kategori': 'Overhead',
                     'debit': -PARKIR_AMOUNT, 'kredit': None, 'saldo': saldo,
                     'subjek': subjek, 'objek': 'Tenant Lain',
                     'catatan': f'Dipecah dari: {keterangan}',
@@ -492,7 +531,7 @@ def build_rows(xlsx_path, sheet_name=None):
                     'catatan': f'Dipecah dari: {keterangan}',
                 })
                 _emit({
-                    'tanggal': tgl_str, 'keterangan': 'Parkir', 'kategori': 'OpEx',
+                    'tanggal': tgl_str, 'keterangan': 'Parkir', 'kategori': 'Overhead',
                     'debit': -PARKIR_AMOUNT, 'kredit': None, 'saldo': saldo,
                     'subjek': subjek, 'objek': 'Tenant Lain',
                     'catatan': f'Dipecah dari: {keterangan}',
