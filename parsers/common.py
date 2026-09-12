@@ -116,16 +116,14 @@ OBJEK_KNOWN_MAP = [
     (r'PT\.?\s*DUTA\s*TEKNOLOGI\s*KREATIF', 'Bayar Layanan', None, None),
     (r'SUKANDA\s*JAYA', 'Belanja UHT', 'Belanja Bahan', None),
     (r'SAFWAN\s*HARIADI', 'Belanja Bahan', 'Belanja Bahan', None),
-    (r'SEAKUN\.?ID', 'Bayar Layanan', 'Belanja Bahan', None),
-    (r'YULIA\s*INDAH\s*PRATIW', 'Belanja Plastik', 'Belanja Operasional', None),
+    (r'YULIA\s*INDAH\s*PRATIW', 'Belanja Plastik', 'Kemasan', None),
     (r'MEILINA\s*PUSPITASAR', 'Belanja Bahan', 'Belanja Bahan', None),
     (r'LUSIANA\s*VALUFI', 'Belanja Pasar', 'Belanja Bahan', None),
-    (r'RIZKY\s*TRIE\s*ADHI', 'Listrik', 'Overhead', None),
+    (r'RIZKY\s*TRIE\s*ADHI', 'Listrik', 'Belanja Utilitas', None),
     (r'\bMADAM\b', 'Belanja Bahan', 'Belanja Bahan', None),
     (r'SHOPEE(?:PAY)?', 'Belanja Shopee', 'Belanja Bahan', None),
     (r'PRIMER', 'Belanja Bahan', 'Belanja Bahan', None),
     (r'SINAR\s*BAHAGIA', 'Belanja SB', 'Belanja Bahan', None),
-    (r'ADOBE', 'Bayar Layanan Adobe', None, None),
     (r'TOKO\s*SURYA', 'Belanja Bahan', 'Belanja Bahan', None),
     (r'MUH\s*YANI', 'Pembayaran Hutang', 'Pembayaran Hutang', None),
     (r'SITI\s*HUMAIRO', 'Ayam', 'Belanja Bahan', None),
@@ -135,8 +133,19 @@ OBJEK_KNOWN_MAP = [
     (r'VISIONET', 'Penjualan Grab', None, 'Penjualan'),
     (r'\bOVO\b', None, 'Belanja Konsumsi', None),
     (r'M\s*ZULFIAN\s*KURNIASA', 'Penjualan Photobooth', 'Penjualan', None),
+    (r'MASUYA\s*GRAHA\s*TRIKE', 'UHT dan Pasta', 'Belanja Bahan', None),
+    (r'NANDA\s*AUDIA\s*AGUSTIN', 'Plastik Kliffer', 'Kemasan', None),
+    (r'DEPO\s*BANGUNAN|MITRA\s*10|TOKO\s*BANGUNAN', 'Renovasi Bangunan', 'Sewa dan Mantenantce Bangunan', None),
 ]
 OBJEK_KNOWN_MAP = [(re.compile(pat, re.I), ket, kat, obj) for pat, ket, kat, obj in OBJEK_KNOWN_MAP]
+
+# provider layanan langganan bulanan -- keterangan dinamis "Biaya Layanan
+# <Provider>", kategori seragam "Subscription"
+SUBSCRIPTION_PROVIDERS = [
+    (re.compile(r'SEAKUN\.?ID', re.I), 'Seakun.id'),
+    (re.compile(r'\bAPPLE\b', re.I), 'Apple'),
+    (re.compile(r'\bADOBE\b', re.I), 'Adobe'),
+]
 
 # orang yang cuma dikenali lewat namanya SENDIRI (bukan lewat kata kunci di
 # catatan) -- kalau namanya tersebut, langsung anggap "Belanja Widia" dst.
@@ -151,7 +160,6 @@ CATATAN_KNOWN_MAP = [
     (r'TIKTOK', 'Iklan Tiktok', 'Marketing', None),
     (r'BELI\s*MASKER|\bMASKER\b', 'Beli Masker', 'Belanja Operasional', 'Tenant Lain'),
     (r'BELANJA\s*PASAR', 'Belanja Pasar', 'Belanja Bahan', None),
-    (r'\bLISTRIK\b', 'Listrik', 'Overhead', None),
 ]
 CATATAN_KNOWN_MAP = [(re.compile(pat, re.I), ket, kat, obj) for pat, ket, kat, obj in CATATAN_KNOWN_MAP]
 
@@ -168,15 +176,32 @@ KETERANGAN_SIMPLIFY_MAP = [
     (r'PANGSIT|RISOL', 'Pangsit dan Risol', 'Belanja Bahan'),
     (r'\bCLEO\b|\bGALON\b|AIR\s*MINUM', 'Belanja Galon', 'Belanja Bahan'),
     (r'ONGKIR|ONGKOS\s*KIRIM|GERUZ+', 'Ongkir', 'Penjualan'),
-    (r'PARKIR', 'Parkir', 'OpEx'),
+    (r'PARKIR', 'Parkir', 'Overhead'),
     (r'BAWANG\s*MERAH', 'Bawang Merah', 'Belanja Bahan'),
     (r'BAWANG\s*PUTIH', 'Bawang Putih', 'Belanja Bahan'),
     (r'\bCABE\b|\bCABAI\b', 'Cabe', 'Belanja Bahan'),
     (r'\bTELUR\b', 'Telur', 'Belanja Bahan'),
     (r'\bBERAS\b', 'Beras', 'Belanja Bahan'),
+    (r'STIKER|STICKER|\bPRINT\b|\bCETAK\b|SABLON', 'Penyetakan', 'Overhead'),
+    (r'\bTIPS?\b|\bMINUS\b|\bLEBIH\b', 'Tip/Minus/Lebih', 'Tip/Minus/Lebih'),
+    (r'RISET\s*MENU|\bRISET\b|PELATIHAN|TRAINING', 'Riset dan Pelatihan', 'Riset dan Development'),
+    (r'SETORAN\s*VIA\s*CDM', 'Setoran Tunai', 'Transaksi Internal'),
+    (r'PEMINDAHBUKUAN|TRANSFER\s*INTERNAL', 'Transaksi Internal', 'Transaksi Internal'),
+    (r'\bPLASTIK\b', 'Plastik', 'Kemasan'),
+    (r'SEWA\s*BANGUNAN', 'Sewa Bangunan', 'Sewa dan Mantenantce Bangunan'),
+    (r'RENOVASI\s*BANGUNAN|BIAYA\s*TUKANG|ONGKOS\s*TUKANG|BAHAN\s*BANGUNAN|RENOVASI\s*KABEL|'
+     r'\bKABEL\b|\bLAMPU\b|\bTOREN\b|\bBESI\b|\bKERAMIK\b|\bPIPA\b|WESTAFEL|\bWC\b|\bKERAN\b',
+     'Renovasi Bangunan', 'Sewa dan Mantenantce Bangunan'),
+    (r'\bPULSA\b|MY\s*TELKOMSEL|PULSA\s*SIMPATI', 'Pulsa dan Internet', 'Belanja Utilitas'),
+    (r'AIR\s*PDAM|\bPDAM\b', 'Air PDAM', 'Belanja Utilitas'),
+    (r'\bLISTRIK\b', 'Listrik', 'Belanja Utilitas'),
 ]
 KETERANGAN_SIMPLIFY_MAP = [(re.compile(pat, re.I), ket, kat) for pat, ket, kat in KETERANGAN_SIMPLIFY_MAP]
-PARKIR_KECIL_RE = re.compile(r'PARKIR', re.I)
+KONSUMSI_UMUM_RE = re.compile(r'\bKONSUMSI\b', re.I)
+TOOLS_EQUIPMENT_RE = re.compile(r'BELANJA\s*TOOLS|\bTOOLS\b', re.I)
+HUTANG_MASUK_RE = re.compile(r'\bHUTANG\b|\bPINJAM(?:AN)?\b', re.I)
+HUTANG_BAYAR_RE = re.compile(
+    r'BAYAR\s*HUTANG|BAYAR\s*PINJAM(?:AN)?|CICILAN\s*HUTANG|CICILAN\s*PINJAM(?:AN)?', re.I)
 
 BELANJA_SB_RE = re.compile(r'BELANJA\s*SB|\bSB\b', re.I)
 AUTOCR_RE = re.compile(r'AUTOCR-PL|WSID', re.I)
@@ -210,13 +235,30 @@ def _gaji_bonus_override(catatan, tanggal_str):
     return f'Gaji {name} {month_name(ref_month)} {str(ref_year)[-2:]}'
 
 
-def _apply_learned_overrides(keterangan, kategori, objek, catatan, debit, kredit):
+def _gaji_tanggal_pembukuan(tanggal_str, name):
+    """Untuk transaksi Gaji nominal besar (>Rp1.500.000) yang bulannya
+    tidak disebut eksplisit di teks: kalau tanggal transaksi di AWAL bulan
+    (<=15), anggap gaji bulan SEBELUMNYA; kalau di AKHIR bulan (>15),
+    anggap gaji bulan pembukuan itu sendiri."""
+    if not tanggal_str:
+        return None
+    d, mo, y = (int(x) for x in tanggal_str.split('/'))
+    if d <= 15:
+        ref_month = mo - 1 if mo > 1 else 12
+        ref_year = y if mo > 1 else y - 1
+    else:
+        ref_month, ref_year = mo, y
+    return f'Gaji {name} {month_name(ref_month)} {ref_year}'
+
+
+def _apply_learned_overrides(keterangan, kategori, objek, catatan, debit, kredit, tanggal=None):
     """Aturan spesifik yang sudah dikonfirmasi via revisi manual (Jan 2025)
     -- dipanggil setelah normalize_keterangan()+categorize() standar,
     boleh menimpa keduanya kalau match. Urutan penting: yang paling
     spesifik dicek duluan."""
     ob = objek or ''
     cat_text = catatan or ''
+    text = f'{keterangan} {objek or ""} {catatan or ""}'.upper()
 
     # Pengeluaran Pribadi (owner) -- penanda eksplisit, prioritas tertinggi.
     # Begitu ketemu, TIDAK ADA aturan kategori lain yang boleh menimpa lagi
@@ -233,6 +275,22 @@ def _apply_learned_overrides(keterangan, kategori, objek, catatan, debit, kredit
     # diseragamkan jadi "Biaya Admin" (termasuk yang tadinya "Bunga Bank")
     if kategori == 'Biaya Admin & Pajak Bank':
         return 'Biaya Admin', kategori, objek
+
+    # Gaji nominal besar (indikasi gaji pegawai sungguhan, bukan uang
+    # kecil serba-guna) -- kalau bulannya belum jelas dari teks, tentukan
+    # dari tanggal pembukuan transaksinya sendiri (lihat _gaji_tanggal_pembukuan)
+    if kategori == 'Gaji Bulan Ini' and debit and abs(debit) > 1500000:
+        gaji_match = match_gaji(keterangan)
+        if gaji_match:
+            nama, bulan_teks = gaji_match
+        else:
+            raw_obj = (objek or '').strip()
+            nama = EMPLOYEE_ALIASES.get(raw_obj.upper(), raw_obj.title()) if raw_obj else None
+            bulan_teks = None
+        if nama and not bulan_teks:
+            gaji_ket = _gaji_tanggal_pembukuan(tanggal, nama)
+            if gaji_ket:
+                return gaji_ket, kategori, objek
 
     if AUTOCR_RE.search(cat_text):
         return 'Setoran Tunai', 'Transaksi Internal', objek
@@ -254,6 +312,23 @@ def _apply_learned_overrides(keterangan, kategori, objek, catatan, debit, kredit
             new_kat = kat if kat else kategori
             new_obj = obj_override if obj_override else objek
             return new_ket, new_kat, new_obj
+
+    for provider_re, provider_name in SUBSCRIPTION_PROVIDERS:
+        if provider_re.search(ob) or provider_re.search(keterangan):
+            return f'Biaya Layanan {provider_name}', 'Subscription', objek
+
+    # hutang masuk (uang pinjaman DITERIMA) vs pembayaran cicilan hutang --
+    # dua arah kata kunci yang sama ("hutang"/"pinjam") jadi harus dibedakan
+    # eksplisit dulu sebelum kena aturan Pembayaran Hutang yang lama
+    if HUTANG_MASUK_RE.search(text) and not HUTANG_BAYAR_RE.search(text) and kredit:
+        pemberi = objek if objek and objek not in ('-', '') else 'Tidak Diketahui'
+        return f'Hutang Baru - {pemberi}', 'Hutang Masuk', objek
+
+    if TOOLS_EQUIPMENT_RE.search(keterangan):
+        return keterangan, 'Tools dan Equipments', objek
+
+    if KONSUMSI_UMUM_RE.search(text):
+        return 'Konsumsi', 'Konsumsi dan Liburan', objek
 
     for pattern, ket, kat, obj_override in CATATAN_KNOWN_MAP:
         if pattern.search(cat_text):
@@ -291,12 +366,12 @@ def _apply_learned_overrides(keterangan, kategori, objek, catatan, debit, kredit
 
 OWNER_KEYWORDS = ('AHMAD ROZIYAN', 'ROZIYAN HIDAYAT', 'OJAN', 'OWNER')
 DEBT_KEYWORDS = ('CICILAN', 'ANGSURAN', 'BAYAR SB', 'PINJAM', 'UTANG')
-UTILITY_KEYWORDS = ('SEWA', 'LISTRIK', ' PLN', 'AIR STO', 'UTILITAS')
+UTILITY_KEYWORDS = ('SEWA', ' PLN', 'AIR STO', 'UTILITAS')
 WALLET_KEYWORDS = ('SHOPEE', 'OVO ', ' OVO', 'GOPAY', 'DANA ', 'TELKOMSEL', 'TOP UP', 'ISI SALDO', 'PULSA', 'BRIVA')
 PURCHASE_KEYWORDS = ('BELANJA', 'BELI ', 'ONGKIR', 'SUPPLIER', 'GANTI UANG BELANJA')
 # furniture/mesin/tools -- nominalnya yang menentukan Belanja Assets (CapEx)
 # vs belanja tools/alat kerja biasa (lihat _categorize_raw)
-ASSET_KEYWORDS = ('FURNITURE', 'MESIN', 'TOOLS', 'PERALATAN', 'MEUBEL', 'KULKAS', 'FREEZER')
+ASSET_KEYWORDS = ('FURNITURE', 'MESIN', 'MEUBEL', 'KULKAS', 'FREEZER')
 PAYROLL_KEYWORDS = ('GAJI',)
 TRANSFER_TYPES = ('TRANSFER', 'TRSF', 'BI-FAST', 'SWITCHING', 'KIRIM')
 
@@ -360,22 +435,27 @@ def match_gaji(keterangan):
 CATEGORIES_REFERENCE = [
     'Saldo Awal',
     'Penjualan',
+    'Penjualan Shopeefood',
     'Belanja Bahan',
     'Belanja Konsumsi',
     'Belanja Operasional',
     'Overhead',
+    'Belanja Utilitas',
     'Marketing',
-    'Reparasi',
+    'Reparasi dan Maintenance',
+    'Riset dan Development',
+    'Tools dan Equipments',
+    'Kemasan',
+    'Subscription',
+    'Konsumsi dan Liburan',
+    'Sewa dan Mantenantce Bangunan',
+    'Pajak Daerah',
     'Belanja Assets',
     'Gaji Bulan Ini',
-    'Riset dan Pengembangan',
     'Tip/Minus/Lebih',
-    'Penarikan',
-    'Penerimaan',
     'Pembayaran Hutang',
+    'Hutang Masuk',
     'Pengeluaran Pribadi',
-    'Pajak Daerah',
-    'Penjualan Shopeefood',
     'Modal & Setoran Pemilik',
     'Pindah Rekening Internal',
     'Transaksi Internal',
@@ -400,24 +480,29 @@ CATEGORIES_REFERENCE = [
 RECON_KNOWN_CATEGORIES = {
     'Saldo Awal',
     'Penjualan',
-    'OpEx',  # pengecualian eksplisit: "Parkir" sengaja tetap ditulis OpEx
+    'Penjualan Shopeefood',
     'Belanja Bahan',
+    'Belanja Konsumsi',
     'Belanja Operasional',
     'Overhead',
-    'Belanja Konsumsi',
+    'Belanja Utilitas',
     'Marketing',
-    'Reparasi',
+    'Reparasi dan Maintenance',
+    'Riset dan Development',
+    'Tools dan Equipments',
+    'Kemasan',
+    'Subscription',
+    'Konsumsi dan Liburan',
+    'Sewa dan Mantenantce Bangunan',
+    'Pajak Daerah',
     'Belanja Assets',
     'Biaya Admin & Pajak Bank',
     'Biaya Admin dan Bunga Bank',
     'Bunga dan Admin Bank',
     'Tip/Minus/Lebih',
-    'Penarikan',
-    'Penerimaan',
     'Pembayaran Hutang',
+    'Hutang Masuk',
     'Pengeluaran Pribadi',
-    'Pajak Daerah',
-    'Penjualan Shopeefood',
     'Pindah Rekening Internal',
     'Pindang Rekening Internal',
     'Transfer Internal',
@@ -469,6 +554,8 @@ def normalize_keterangan(keterangan, debit, kredit):
         return 'Pulsa/Kuota'
     if 'FLIPTECH' in ket_upper:
         return 'Pindah Rekening Internal via Fliptech'
+    if 'PEMINDAHBUKUAN' in ket_upper or 'TRANSFER INTERNAL' in ket_upper:
+        return ket
     if ' TO ' in ket_upper or ket_upper.startswith(('TRANSFER', 'TRSF', 'BI-FAST', 'SWITCHING')):
         return 'Transfer Masuk' if kredit else 'Transfer Keluar'
     return ket
@@ -637,6 +724,7 @@ def apply_universal_fields(rows, self_code='', entity_code_map=None):
         else:
             r['keterangan'], r['kategori'], r['objek'] = _apply_learned_overrides(
                 r['keterangan'], r['kategori'], r.get('objek'), r.get('catatan'), debit, kredit,
+                tanggal=r.get('tanggal'),
             )
 
         raw_objek_for_check = r.get('objek')
