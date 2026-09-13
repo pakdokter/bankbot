@@ -130,7 +130,7 @@ OBJEK_KNOWN_MAP = [
     (r'YUSRAN\s*FAILANI', 'Belanja Galon', 'Belanja Bahan', None),
     (r'BADAN\s*PENDAPATAN\s*D.*KBB|BADAN\s*PENDAPATAN\s*DAERAH', 'PB1 Bulan Sebelumnya', 'Pajak Daerah', None),
     (r'AIRPAY\s*INTERNATION', None, 'Penjualan Shopeefood', 'Penjualan'),
-    (r'VISIONET', 'Penjualan Grab', None, 'Penjualan'),
+    (r'VISIONET', 'Penjualan Grabfood', None, 'Penjualan'),
     (r'\bOVO\b', None, 'Belanja Konsumsi', None),
     (r'M\s*ZULFIAN\s*KURNIASA', 'Penjualan Photobooth', 'Penjualan', None),
     (r'MASUYA\s*GRAHA\s*TRIKE', 'UHT dan Pasta', 'Belanja Bahan', None),
