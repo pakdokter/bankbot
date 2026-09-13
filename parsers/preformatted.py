@@ -8,7 +8,10 @@ import sys
 from collections import Counter
 import openpyxl
 
-from .common import HEADERS, write_xlsx, build_filename, month_name, match_gaji
+from .common import (
+    HEADERS, write_xlsx, build_filename, month_name, match_gaji,
+    _shared_rule_match, _shared_kategori_asli_remap, enforce_recon_category,
+)
 
 FIELD_KEYS = ['tanggal', 'keterangan', 'kategori', 'debit', 'kredit', 'saldo', 'subjek', 'objek', 'catatan']
 HEADER_NAME_MAP = {h.upper(): key for h, key in zip(HEADERS, FIELD_KEYS)}
@@ -55,7 +58,7 @@ KEYWORD_RULES = [
     (r'FADHILAH', 'Belanja Bahan', 'Fadhilah'),
     (r'MAK\s*OPIK|MAH\s*OPIK', 'Belanja Bahan', 'Mak Opik'),
     (r'PASAR\s*PANCOR|\bPASAR\b', 'Belanja Bahan', 'Pasar'),
-    (r'DEPO\s*BANGUNAN|MITRA\s*10|TOKO\s*BANGUNAN', 'Sewa dan Mantenantce Bangunan', None),
+    (r'DEPO\s*BANGUNAN|MITRA\s*10|TOKO\s*BANGUNAN', 'Sewa dan Maintenance Bangunan', None),
     (r'NANDA\s*AUDIA\s*AGUSTIN', 'Kemasan', 'Plastik Kliffer'),
 ]
 KEYWORD_RULES = [(re.compile(pat, re.I), kat, obj) for pat, kat, obj in KEYWORD_RULES]
@@ -78,22 +81,23 @@ ITEM_SIMPLIFY_MAP = [
     (r'\bTELUR\b', 'Telur', 'Belanja Bahan'),
     (r'\bBERAS\b', 'Beras', 'Belanja Bahan'),
     (r'STIKER|STICKER|\bPRINT\b|\bCETAK\b|SABLON', 'Penyetakan', 'Overhead'),
-    (r'\bTIPS?\b|\bMINUS\b|\bLEBIH\b', 'Tip/Minus/Lebih', 'Tip/Minus/Lebih'),
     (r'RISET\s*MENU|\bRISET\b|PELATIHAN|TRAINING', 'Riset dan Pelatihan', 'Riset dan Development'),
     (r'SETORAN\s*VIA\s*CDM', 'Setoran Tunai', 'Transaksi Internal'),
     (r'PEMINDAHBUKUAN|TRANSFER\s*INTERNAL', 'Transaksi Internal', 'Transaksi Internal'),
     (r'\bPLASTIK\b', 'Plastik', 'Kemasan'),
-    (r'SEWA\s*BANGUNAN', 'Sewa Bangunan', 'Sewa dan Mantenantce Bangunan'),
+    (r'SEWA\s*BANGUNAN', 'Sewa Bangunan', 'Sewa dan Maintenance Bangunan'),
     (r'RENOVASI\s*BANGUNAN|BIAYA\s*TUKANG|ONGKOS\s*TUKANG|BAHAN\s*BANGUNAN|RENOVASI\s*KABEL|'
      r'\bKABEL\b|\bLAMPU\b|\bTOREN\b|\bBESI\b|\bKERAMIK\b|\bPIPA\b|WESTAFEL|\bWC\b|\bKERAN\b',
-     'Renovasi Bangunan', 'Sewa dan Mantenantce Bangunan'),
+     'Renovasi Bangunan', 'Sewa dan Maintenance Bangunan'),
     (r'\bPULSA\b|MY\s*TELKOMSEL|PULSA\s*SIMPATI|TELKOM', 'Pulsa dan Internet', 'Belanja Utilitas'),
     (r'AIR\s*PDAM|\bPDAM\b', 'Air PDAM', 'Belanja Utilitas'),
     (r'\bLISTRIK\b', 'Listrik', 'Belanja Utilitas'),
 ]
 ITEM_SIMPLIFY_MAP = [(re.compile(pat, re.I), ket, kat) for pat, ket, kat in ITEM_SIMPLIFY_MAP]
 KONSUMSI_UMUM_RE = re.compile(r'\bKONSUMSI\b', re.I)
-TOOLS_EQUIPMENT_RE = re.compile(r'BELANJA\s*TOOLS|\bTOOLS\b', re.I)
+TOOLS_EQUIPMENT_RE = re.compile(r'BELANJA\s*TOOLS|\bTOOLS\b|CUTLERIES', re.I)
+TIP_MINUS_RE = re.compile(r'\bTIPS?\b|\bMINUS\b|\bLEBIH\b|\bCUST\b', re.I)
+TIP_MINUS_THRESHOLD = 100000
 HUTANG_MASUK_RE = re.compile(r'\bHUTANG\b|\bPINJAM(?:AN)?\b', re.I)
 HUTANG_BAYAR_RE = re.compile(
     r'BAYAR\s*HUTANG|BAYAR\s*PINJAM(?:AN)?|CICILAN\s*HUTANG|CICILAN\s*PINJAM(?:AN)?', re.I)
@@ -191,9 +195,9 @@ def _apply_keyword_overrides(keterangan, kategori, objek, catatan, is_kredit=Fal
     # walau keterangannya tidak secara harfiah menyebut kata itu
     admin_bunga_text = f'{text} {kategori}'.upper()
     if BIAYA_ADMIN_RE.search(admin_bunga_text):
-        return 'Biaya Admin', 'Biaya Admin & Pajak Bank', objek
+        return 'Biaya Admin', 'Biaya Admin Bank', objek
     if BUNGA_RE.search(admin_bunga_text):
-        return 'Bunga Bank', 'Biaya Admin & Pajak Bank', objek
+        return 'Bunga Bank', 'Biaya Admin Bank', objek
 
     if SETORAN_RE.search(text):
         # setoran tunai kasir <-> bank = perpindahan antar "kantong" Stoa
@@ -222,6 +226,10 @@ def _apply_keyword_overrides(keterangan, kategori, objek, catatan, is_kredit=Fal
 
     if TOOLS_EQUIPMENT_RE.search(keterangan):
         return keterangan, 'Tools dan Equipments', objek
+
+    amount = abs(debit) if debit is not None else None
+    if TIP_MINUS_RE.search(text) and amount is not None and amount < TIP_MINUS_THRESHOLD:
+        return 'Tip/Minus/Lebih', 'Tip/Minus/Lebih', objek
 
     if KONSUMSI_UMUM_RE.search(text):
         return 'Konsumsi', 'Konsumsi dan Liburan', objek
@@ -297,6 +305,18 @@ def _apply_keyword_overrides(keterangan, kategori, objek, catatan, is_kredit=Fal
 
     if (new_kategori.strip().lower().startswith('belanja') or new_kategori == 'Overhead') and (not new_objek or new_objek == '-'):
         new_objek = 'Tenant Lain'
+
+    # konsultasi terakhir ke shared_rules (data bersama dgn reconbot) --
+    # kalau ada aturan yang cocok dan belum ketangkap logika lokal di atas,
+    # pakai kategori dari situ (data bersama dianggap lebih otoritatif)
+    shared_hit = _shared_rule_match(f'{new_keterangan} {objek or ""} {catatan or ""}',
+                                     debit, (1 if is_kredit else None))
+    if shared_hit:
+        new_kategori = shared_hit
+    remapped = _shared_kategori_asli_remap(new_kategori)
+    if remapped:
+        new_kategori = remapped
+    new_kategori = enforce_recon_category(new_kategori)
 
     return new_keterangan, new_kategori, new_objek
 
@@ -477,7 +497,7 @@ def build_rows(xlsx_path, sheet_name=None):
                 if remainder:
                     fee_label = 'Biaya Admin' if is_debit else 'Bunga Bank'
                     _emit({
-                        'tanggal': tgl_str, 'keterangan': fee_label, 'kategori': 'Biaya Admin & Pajak Bank',
+                        'tanggal': tgl_str, 'keterangan': fee_label, 'kategori': 'Biaya Admin Bank',
                         'debit': -remainder if is_debit else None,
                         'kredit': None if is_debit else remainder,
                         'saldo': saldo, 'subjek': '-', 'objek': self_code,
@@ -544,7 +564,7 @@ def build_rows(xlsx_path, sheet_name=None):
 
         if kategori == 'Penjualan':
             subjek, objek = 'Penjualan', self_code
-        elif kategori == 'Biaya Admin & Pajak Bank':
+        elif kategori == 'Biaya Admin Bank':
             subjek, objek = '-', self_code
         elif kategori == 'Transaksi Internal':
             # dari aturan SETORAN_RE di _apply_keyword_overrides: kalau nama
