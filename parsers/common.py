@@ -135,7 +135,7 @@ OBJEK_KNOWN_MAP = [
     (r'M\s*ZULFIAN\s*KURNIASA', 'Penjualan Photobooth', 'Penjualan', None),
     (r'MASUYA\s*GRAHA\s*TRIKE', 'UHT dan Pasta', 'Belanja Bahan', None),
     (r'NANDA\s*AUDIA\s*AGUSTIN', 'Plastik Kliffer', 'Kemasan', None),
-    (r'DEPO\s*BANGUNAN|MITRA\s*10|TOKO\s*BANGUNAN', 'Renovasi Bangunan', 'Sewa dan Mantenantce Bangunan', None),
+    (r'DEPO\s*BANGUNAN|MITRA\s*10|TOKO\s*BANGUNAN', 'Renovasi Bangunan', 'Sewa dan Maintenance Bangunan', None),
 ]
 OBJEK_KNOWN_MAP = [(re.compile(pat, re.I), ket, kat, obj) for pat, ket, kat, obj in OBJEK_KNOWN_MAP]
 
@@ -183,22 +183,23 @@ KETERANGAN_SIMPLIFY_MAP = [
     (r'\bTELUR\b', 'Telur', 'Belanja Bahan'),
     (r'\bBERAS\b', 'Beras', 'Belanja Bahan'),
     (r'STIKER|STICKER|\bPRINT\b|\bCETAK\b|SABLON', 'Penyetakan', 'Overhead'),
-    (r'\bTIPS?\b|\bMINUS\b|\bLEBIH\b', 'Tip/Minus/Lebih', 'Tip/Minus/Lebih'),
     (r'RISET\s*MENU|\bRISET\b|PELATIHAN|TRAINING', 'Riset dan Pelatihan', 'Riset dan Development'),
     (r'SETORAN\s*VIA\s*CDM', 'Setoran Tunai', 'Transaksi Internal'),
     (r'PEMINDAHBUKUAN|TRANSFER\s*INTERNAL', 'Transaksi Internal', 'Transaksi Internal'),
     (r'\bPLASTIK\b', 'Plastik', 'Kemasan'),
-    (r'SEWA\s*BANGUNAN', 'Sewa Bangunan', 'Sewa dan Mantenantce Bangunan'),
+    (r'SEWA\s*BANGUNAN', 'Sewa Bangunan', 'Sewa dan Maintenance Bangunan'),
     (r'RENOVASI\s*BANGUNAN|BIAYA\s*TUKANG|ONGKOS\s*TUKANG|BAHAN\s*BANGUNAN|RENOVASI\s*KABEL|'
      r'\bKABEL\b|\bLAMPU\b|\bTOREN\b|\bBESI\b|\bKERAMIK\b|\bPIPA\b|WESTAFEL|\bWC\b|\bKERAN\b',
-     'Renovasi Bangunan', 'Sewa dan Mantenantce Bangunan'),
+     'Renovasi Bangunan', 'Sewa dan Maintenance Bangunan'),
     (r'\bPULSA\b|MY\s*TELKOMSEL|PULSA\s*SIMPATI', 'Pulsa dan Internet', 'Belanja Utilitas'),
     (r'AIR\s*PDAM|\bPDAM\b', 'Air PDAM', 'Belanja Utilitas'),
     (r'\bLISTRIK\b', 'Listrik', 'Belanja Utilitas'),
 ]
 KETERANGAN_SIMPLIFY_MAP = [(re.compile(pat, re.I), ket, kat) for pat, ket, kat in KETERANGAN_SIMPLIFY_MAP]
 KONSUMSI_UMUM_RE = re.compile(r'\bKONSUMSI\b', re.I)
-TOOLS_EQUIPMENT_RE = re.compile(r'BELANJA\s*TOOLS|\bTOOLS\b', re.I)
+TOOLS_EQUIPMENT_RE = re.compile(r'BELANJA\s*TOOLS|\bTOOLS\b|CUTLERIES', re.I)
+TIP_MINUS_RE = re.compile(r'\bTIPS?\b|\bMINUS\b|\bLEBIH\b|\bCUST\b', re.I)
+TIP_MINUS_THRESHOLD = 100000
 HUTANG_MASUK_RE = re.compile(r'\bHUTANG\b|\bPINJAM(?:AN)?\b', re.I)
 HUTANG_BAYAR_RE = re.compile(
     r'BAYAR\s*HUTANG|BAYAR\s*PINJAM(?:AN)?|CICILAN\s*HUTANG|CICILAN\s*PINJAM(?:AN)?', re.I)
@@ -273,7 +274,7 @@ def _apply_learned_overrides(keterangan, kategori, objek, catatan, debit, kredit
     # nama pihak yang tidak relevan (sisa dari transaksi lain), jadi
     # kategori yang sudah benar harus dipertahankan, cuma keterangan yang
     # diseragamkan jadi "Biaya Admin" (termasuk yang tadinya "Bunga Bank")
-    if kategori == 'Biaya Admin & Pajak Bank':
+    if kategori == 'Biaya Admin Bank':
         return 'Biaya Admin', kategori, objek
 
     # Gaji nominal besar (indikasi gaji pegawai sungguhan, bukan uang
@@ -326,6 +327,10 @@ def _apply_learned_overrides(keterangan, kategori, objek, catatan, debit, kredit
 
     if TOOLS_EQUIPMENT_RE.search(keterangan):
         return keterangan, 'Tools dan Equipments', objek
+
+    amount = abs(debit) if debit else (abs(kredit) if kredit else None)
+    if TIP_MINUS_RE.search(text) and amount is not None and amount < TIP_MINUS_THRESHOLD:
+        return 'Tip/Minus/Lebih', 'Tip/Minus/Lebih', objek
 
     if KONSUMSI_UMUM_RE.search(text):
         return 'Konsumsi', 'Konsumsi dan Liburan', objek
@@ -448,8 +453,10 @@ CATEGORIES_REFERENCE = [
     'Kemasan',
     'Subscription',
     'Konsumsi dan Liburan',
-    'Sewa dan Mantenantce Bangunan',
+    'Sewa dan Maintenance Bangunan',
     'Pajak Daerah',
+    'Pajak dan Administrasi',
+    'Reparasi dan Maintenance Tools dan Mesin',
     'Belanja Assets',
     'Gaji Bulan Ini',
     'Tip/Minus/Lebih',
@@ -459,7 +466,7 @@ CATEGORIES_REFERENCE = [
     'Modal & Setoran Pemilik',
     'Pindah Rekening Internal',
     'Transaksi Internal',
-    'Biaya Admin & Pajak Bank',
+    'Biaya Admin Bank',
     'Transfer Lainnya',
     'New Kategori',
 ]
@@ -493,10 +500,12 @@ RECON_KNOWN_CATEGORIES = {
     'Kemasan',
     'Subscription',
     'Konsumsi dan Liburan',
-    'Sewa dan Mantenantce Bangunan',
+    'Sewa dan Maintenance Bangunan',
     'Pajak Daerah',
+    'Pajak dan Administrasi',
+    'Reparasi dan Maintenance Tools dan Mesin',
     'Belanja Assets',
-    'Biaya Admin & Pajak Bank',
+    'Biaya Admin Bank',
     'Biaya Admin dan Bunga Bank',
     'Bunga dan Admin Bank',
     'Tip/Minus/Lebih',
@@ -576,7 +585,10 @@ def _shared_rule_match(text, debit, kredit):
     tertentu, mis. khusus Jago) diabaikan di sini karena categorize() tidak
     tahu rekening sumbernya -- keterbatasan yang disengaja, bukan bug."""
     text_upper = text.upper()
+    amount = abs(debit) if debit else (abs(kredit) if kredit else None)
     for rule in SHARED_CATEGORY_OVERRIDE_RULES:
+        if 'kategori_asli' in rule:
+            continue  # ditangani terpisah sesudah kategori awal diketahui
         direction = rule.get('direction')
         if direction == 'keluar' and not debit:
             continue
@@ -584,12 +596,33 @@ def _shared_rule_match(text, debit, kredit):
             continue
         all_kw = rule.get('all')
         any_kw = rule.get('any')
+        none_kw = rule.get('none_of')
+        if none_kw and any(str(kw).upper() in text_upper for kw in none_kw):
+            continue
+        amount_min = rule.get('amount_min')
+        amount_max = rule.get('amount_max')
+        if amount_min is not None and (amount is None or amount < amount_min):
+            continue
+        if amount_max is not None and (amount is None or amount > amount_max):
+            continue
         if all_kw:
             if all(str(kw).upper() in text_upper for kw in all_kw):
                 return rule.get('category')
         elif any_kw:
             if any(str(kw).upper() in text_upper for kw in any_kw):
                 return rule.get('category')
+    return None
+
+
+def _shared_kategori_asli_remap(kategori):
+    """Aturan "kategori_asli" di shared_rules: remap kategori yang SUDAH
+    ditentukan (bukan berdasarkan kata kunci teks) ke nama lain yang
+    dipakai reconbot -- dicek terakhir, sesudah semua logika kategori
+    lain selesai."""
+    kat_lower = (kategori or '').strip().lower()
+    for rule in SHARED_CATEGORY_OVERRIDE_RULES:
+        if rule.get('kategori_asli') and rule['kategori_asli'].lower() == kat_lower:
+            return rule.get('category')
     return None
 
 
@@ -604,6 +637,9 @@ def categorize(keterangan, objek, catatan, debit, kredit):
     text = f"{keterangan or ''} {objek or ''} {catatan or ''}".upper()
 
     kat = _categorize_raw(ket, ob, text, debit, kredit)
+    remapped = _shared_kategori_asli_remap(kat)
+    if remapped:
+        kat = remapped
     return enforce_recon_category(kat)
 
 
@@ -617,9 +653,9 @@ def _categorize_raw(ket, ob, text, debit, kredit):
         return 'Saldo Awal'
     if ket in ('BUNGA', 'BUNGA BANK', 'PAJAK BUNGA', 'BIAYA ADMIN', 'BIAYA ADM', 'ADMIN TRANSFER',
                'INTEREST ON ACCOUNT', 'MINIMUM BALANCE FEE', 'CR KOREKSI BUNGA'):
-        return 'Biaya Admin & Pajak Bank'
+        return 'Biaya Admin Bank'
     if 'BIAYA PEMBAYARAN' in text:
-        return 'Biaya Admin & Pajak Bank'
+        return 'Biaya Admin Bank'
     if 'FLIPTECH' in text:
         return 'Transaksi Internal'
     if ' TO ' in text or 'IBIZ' in text or 'NBMB' in text:
@@ -726,6 +762,10 @@ def apply_universal_fields(rows, self_code='', entity_code_map=None):
                 r['keterangan'], r['kategori'], r.get('objek'), r.get('catatan'), debit, kredit,
                 tanggal=r.get('tanggal'),
             )
+            remapped = _shared_kategori_asli_remap(r['kategori'])
+            if remapped:
+                r['kategori'] = remapped
+            r['kategori'] = enforce_recon_category(r['kategori'])
 
         raw_objek_for_check = r.get('objek')
         counterparty = resolve_party(r.get('objek', ''), self_code, entity_code_map)
@@ -744,7 +784,7 @@ def apply_universal_fields(rows, self_code='', entity_code_map=None):
 
         if r.get('_is_opening_balance'):
             r['subjek'], r['objek'] = '-', '-'
-        elif r['kategori'] == 'Biaya Admin & Pajak Bank':
+        elif r['kategori'] == 'Biaya Admin Bank':
             r['subjek'], r['objek'] = '-', (self_code or 'Rekening Ini')
         elif debit:
             r['subjek'], r['objek'] = (self_code or 'Rekening Ini'), counterparty
