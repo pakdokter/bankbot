@@ -15,6 +15,7 @@ from . import shared_rules
 # bersama yang benar-benar ada.
 SHARED_CATEGORY_OVERRIDE_RULES = shared_rules.get('category_override_rules', [])
 SHARED_EMPLOYEE_ALIASES = shared_rules.get('employee_aliases', {})
+AMBIGUOUS_FIRST_NAMES = set(n.lower() for n in shared_rules.get('ambiguous_first_names', ['baiq']))
 
 HEADERS = [
     'Tanggal', 'Keterangan Transaksi', 'Kategori Transaksi', 'Debit', 'Kredit',
