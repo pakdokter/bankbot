@@ -11,6 +11,7 @@ import openpyxl
 from .common import (
     HEADERS, write_xlsx, build_filename, month_name, match_gaji,
     _shared_rule_match, _shared_kategori_asli_remap, enforce_recon_category,
+    AMBIGUOUS_FIRST_NAMES,
 )
 
 FIELD_KEYS = ['tanggal', 'keterangan', 'kategori', 'debit', 'kredit', 'saldo', 'subjek', 'objek', 'catatan']
@@ -185,6 +186,16 @@ def _apply_keyword_overrides(keterangan, kategori, objek, catatan, is_kredit=Fal
         # penghasilan luar yang disuntikkan sebagai modal, bukan beban gaji
         if is_kredit and any(m in employee_name.upper() for m in OWNER_MARKERS):
             return 'Modal Masuk', 'Modal & Setoran Pemilik', employee_name
+        # kalau nama yang diekstrak dari KETERANGAN cuma nama depan yang
+        # ambigu (mis. "Baiq" -- dipakai >1 pegawai), dan Objek yang SUDAH
+        # ADA di baris ini ternyata lebih detail (nama lengkap, bukan cuma
+        # nama depan yang sama), pertahankan Objek asli -- jangan sampai
+        # info yang lebih spesifik itu malah tertimpa jadi kurang jelas
+        if employee_name.strip().lower() in AMBIGUOUS_FIRST_NAMES:
+            objek_asli = (objek or '').strip()
+            if objek_asli and objek_asli.upper() != employee_name.upper() and \
+                    objek_asli.upper().startswith(employee_name.upper()):
+                return keterangan, 'Gaji Pegawai', objek_asli
         return keterangan, 'Gaji Pegawai', employee_name
 
     if PENJUALAN_RE.search(kategori) or PENJUALAN_RE.search(keterangan):
