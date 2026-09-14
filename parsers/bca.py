@@ -90,7 +90,7 @@ def extract_lines(pdf_path):
                 continue
             end = len(raw_lines)
             for i, l in enumerate(raw_lines):
-                if l.startswith('Bersambung ke halaman berikut'):
+                if l.upper().startswith('BERSAMBUNG KE HALAMAN BERIKUT'):
                     end = i
                     break
             lines.extend(raw_lines[start + 1:end])
