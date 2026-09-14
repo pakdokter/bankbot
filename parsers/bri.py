@@ -9,7 +9,7 @@ HEADER_RE = re.compile(
 )
 TELLER_RE = re.compile(r'^[A-Z0-9]{5,12}$')
 
-SKIP_STARTS = (
+SKIP_STARTS = tuple(s.upper() for s in (
     'LAPORAN TRANSAKSI', 'STATEMENT OF FINANCIAL', 'Halaman', 'Page',
     'Tanggal Laporan', 'Statement Date', 'Kepada Yth', 'Periode Transaksi',
     'Transaction Period', 'No. Rekening', 'Account No', 'Nama Produk',
@@ -17,7 +17,7 @@ SKIP_STARTS = (
     'Currency', 'Unit Kerja', 'Business Unit', 'Tanggal Transaksi',
     'Transaction Date',
     'DUSUN', 'KAB.', 'PATTIMURA', 'PR,OVINSI',
-)
+))
 
 ACCOUNT_NUMBER_MAP = {
     '015701106040507': ACCOUNT_CODES['bri_personal'],
@@ -49,7 +49,7 @@ def extract_lines(pdf_path):
                 line = raw.strip()
                 if not line:
                     continue
-                if line.startswith(SKIP_STARTS):
+                if line.upper().startswith(SKIP_STARTS):
                     continue
                 if line.startswith(('AEAV', 'Created By', 'Statement')):
                     continue
