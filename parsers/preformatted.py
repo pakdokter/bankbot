@@ -404,6 +404,13 @@ def build_rows(xlsx_path, sheet_name=None):
             subjek = 'Kas/Buku'
         if objek.strip().upper() == 'KASIR':
             objek = 'Kas/Buku'
+        # sisa artefak footer PDF yang bocor ke kolom Objek/Subjek dari bug
+        # parser lama (mis. "Bersambung ke Halaman berikut") -- bersihkan
+        # kalau file lama yang sudah terlanjur rusak diproses ulang di sini
+        if 'BERSAMBUNG KE HALAMAN' in objek.strip().upper():
+            objek = 'Tenant Lain'
+        if 'BERSAMBUNG KE HALAMAN' in subjek.strip().upper():
+            subjek = ''
 
         if kategori.strip().upper().startswith('SALDO AWAL') or keterangan.strip().upper().startswith('SALDO AWAL'):
             # beberapa file manual cuma isi Kredit (atau Debit) untuk baris
