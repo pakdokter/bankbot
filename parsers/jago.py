@@ -194,33 +194,44 @@ def _merge_biaya_admin_rows(rows, saldo_awal, saldo_akhir):
     """Jago sering mencatat bunga/pajak/biaya admin sebagai banyak baris
     kecil di hari yang sama (kadang beberapa di antaranya bahkan tidak
     tercatat nominalnya sama sekali di PDF karena dibulatkan ke 0) --
-    digabung jadi SATU baris "Biaya Admin", dan nominal gabungannya
-    disesuaikan supaya saldo berjalan pas tepat ke Saldo Akhir resmi,
-    menghilangkan celah pembulatan recehan yang selama ini cuma "hilang"
-    diam-diam."""
-    idx = [i for i, r in enumerate(rows) if r.get('kategori') == 'Biaya Admin & Pajak Bank']
-    if len(idx) < 2:
+    digabung jadi SATU baris "Biaya Admin" PER TANGGAL (bukan digabung
+    lintas tanggal), dan nominal gabungannya disesuaikan supaya saldo
+    berjalan pas tepat ke Saldo Akhir resmi di akhir bulan, menghilangkan
+    celah pembulatan recehan yang selama ini cuma "hilang" diam-diam."""
+    idx_by_date = {}
+    for i, r in enumerate(rows):
+        if r.get('kategori') == 'Biaya Admin Bank':
+            idx_by_date.setdefault(r['tanggal'], []).append(i)
+
+    # cuma tanggal yang punya >=2 baris biaya admin yang perlu digabung
+    dates_to_merge = [d for d, idxs in idx_by_date.items() if len(idxs) >= 2]
+    if not dates_to_merge:
         return rows
 
-    first_i, last_i = idx[0], idx[-1]
-    group = [rows[i] for i in idx]
-    combined_debit = sum(r.get('debit') or 0 for r in group)
-    combined_kredit = sum(r.get('kredit') or 0 for r in group)
+    new_rows = []
+    emitted_dates = set()
+    for i, r in enumerate(rows):
+        idxs = idx_by_date.get(r['tanggal'])
+        if r.get('kategori') == 'Biaya Admin Bank' and idxs and len(idxs) >= 2:
+            if r['tanggal'] in emitted_dates:
+                continue  # sudah digabung & dimasukkan sebelumnya, lewati baris ini
+            group = [rows[j] for j in idxs]
+            combined_debit = sum(g.get('debit') or 0 for g in group)
+            combined_kredit = sum(g.get('kredit') or 0 for g in group)
+            merged = dict(group[-1])  # basis: baris terakhir grup itu (catatan representatif)
+            merged['keterangan'] = 'Biaya Admin'
+            merged['kategori'] = 'Biaya Admin Bank'
+            merged['debit'] = combined_debit or None
+            merged['kredit'] = combined_kredit or None
+            new_rows.append(merged)
+            emitted_dates.add(r['tanggal'])
+        else:
+            new_rows.append(r)
 
-    merged = dict(group[-1])  # pakai baris terakhir sebagai basis (tanggal/catatan representatif)
-    merged['keterangan'] = 'Biaya Admin'
-    merged['kategori'] = 'Biaya Admin & Pajak Bank'
-    merged['debit'] = combined_debit or None
-    merged['kredit'] = combined_kredit or None
-
-    new_rows = rows[:first_i] + [merged] + rows[last_i + 1:]
-
-    # hitung ulang saldo berjalan dari titik gabungan sampai akhir, supaya
-    # baris terakhir pas persis ke saldo_akhir resmi (bukan hasil rekonstruksi)
-    running = rows[first_i - 1]['saldo'] if first_i > 0 else saldo_awal
-    merge_pos = first_i
-    for i in range(merge_pos, len(new_rows)):
-        r = new_rows[i]
+    # hitung ulang saldo berjalan utuh dari awal, supaya baris terakhir
+    # pas persis ke saldo_akhir resmi (bukan hasil rekonstruksi per baris)
+    running = saldo_awal if saldo_awal is not None else 0.0
+    for r in new_rows:
         running = round(running + (r.get('debit') or 0) + (r.get('kredit') or 0), 2)
         r['saldo'] = running
     if saldo_akhir is not None and new_rows:
