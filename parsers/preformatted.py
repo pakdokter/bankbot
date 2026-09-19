@@ -11,7 +11,7 @@ import openpyxl
 from .common import (
     HEADERS, write_xlsx, build_filename, month_name, match_gaji,
     _shared_rule_match, _shared_kategori_asli_remap, enforce_recon_category,
-    AMBIGUOUS_FIRST_NAMES, _is_owner_text,
+    AMBIGUOUS_FIRST_NAMES, _is_owner_text, OWNER_FULL_NAME,
 )
 
 FIELD_KEYS = ['tanggal', 'keterangan', 'kategori', 'debit', 'kredit', 'saldo', 'subjek', 'objek', 'catatan']
@@ -182,7 +182,10 @@ def _apply_keyword_overrides(keterangan, kategori, objek, catatan, is_kredit=Fal
     # sudah kena penanda eksplisit Pengeluaran Pribadi/Gaji di atas.
     if (_is_owner_text(ob_upper) or _is_owner_text(subjek_upper)) and kategori not in (
             'Transaksi Internal', 'Pengeluaran Pribadi') and not (kategori or '').upper().startswith('GAJI'):
-        return 'Transaksi Internal', 'Transaksi Internal', objek
+        # Objek/Subjek ditulis ulang jadi nama lengkap owner yang seragam,
+        # apa pun bentuk mentahnya dari hasil scan (terpotong/tanpa spasi)
+        new_objek = OWNER_FULL_NAME if _is_owner_text(ob_upper) else objek
+        return 'Transaksi Internal', 'Transaksi Internal', new_objek
 
     if KOREKSI_RE.search(keterangan):
         return 'Tip/Minus', 'Tip/Minus/Lebih', objek
@@ -206,7 +209,7 @@ def _apply_keyword_overrides(keterangan, kategori, objek, catatan, is_kredit=Fal
         # bukan Modal & Setoran Pemilik -- modal cuma kalau ada penanda
         # eksplisit (dicek terpisah lewat MODAL_MASUK_NAMES/shared_rules)
         if is_kredit and _is_owner_text(employee_name):
-            return 'Transaksi Internal', 'Transaksi Internal', employee_name
+            return 'Transaksi Internal', 'Transaksi Internal', OWNER_FULL_NAME
         # kalau nama yang diekstrak dari KETERANGAN cuma nama depan yang
         # ambigu (mis. "Baiq" -- dipakai >1 pegawai), dan Objek yang SUDAH
         # ADA di baris ini ternyata lebih detail (nama lengkap, bukan cuma
