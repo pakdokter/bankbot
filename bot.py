@@ -15,7 +15,10 @@ from parsers.detect import parse_statement, BANK_LABELS
 from parsers import kasir as kasir_parser
 from parsers import preformatted as preformatted_parser
 from parsers import sales_detail as sales_detail_parser
-from parsers.common import write_xlsx, write_recon_xlsx, build_filename, sheet_title_from_meta, split_workbook, sanitize_filename
+from parsers.common import (
+    write_xlsx, write_recon_xlsx, build_filename, sheet_title_from_meta, split_workbook,
+    sanitize_filename, apply_cross_account_internal_validation,
+)
 from openpyxl import load_workbook
 
 logging.basicConfig(
@@ -328,6 +331,12 @@ async def _merge_and_deliver(context, chat_id, chosen, edit_message):
             'sheet_title': e['label'], 'rows': e['rows'],
             'saldo_awal': e['saldo_awal'], 'saldo_akhir': e['saldo_akhir'],
         } for e in chosen]
+        # BUG 2 (validasi silang): transaksi yang tanggal & nominalnya sama
+        # persis, satu Debit di satu rekening dan satu Kredit di rekening
+        # lain dalam gabungan ini, hampir pasti transfer internal antar
+        # rekening Stoa sendiri -- paksa dua-duanya "Transaksi Internal"
+        # supaya kedua sisi transfer yang sama tidak pernah beda kategori.
+        apply_cross_account_internal_validation(recon_entries)
         write_recon_xlsx(recon_entries, out_path)
 
         # sesi otomatis dikosongkan begitu selesai gabung, supaya tidak
