@@ -18,7 +18,7 @@ SHARED_EMPLOYEE_ALIASES = shared_rules.get('employee_aliases', {})
 AMBIGUOUS_FIRST_NAMES = set(n.lower() for n in shared_rules.get('ambiguous_first_names', ['baiq']))
 
 HEADERS = [
-    'Tanggal', 'Keterangan Transaksi', 'Kategori Transaksi', 'Debit', 'Kredit',
+    'Tanggal', 'Items / Activities', 'Kategori Transaksi', 'Debit', 'Kredit',
     'Saldo Kumulatif', 'Subjek Transaksi', 'Objek Transaksi', 'Keterangan Tambahan',
 ]
 
@@ -378,7 +378,7 @@ def _apply_learned_overrides(keterangan, kategori, objek, catatan, debit, kredit
 # nomor rekening spesifik yang sudah dikonfirmasi user lewat feedback.
 # Tetap belum 100% akurat untuk semua kasus (lihat catatan di bawah).
 
-OWNER_KEYWORDS = ('AHMAD ROZIYAN', 'ROZIYAN HIDAYAT', 'OJAN', 'OWNER')
+OWNER_KEYWORDS = ('AHMAD ROZIY', 'ROZIYAN HIDAYAT', 'OJAN', 'OWNER')
 
 
 def _normalize_name_text(s):
