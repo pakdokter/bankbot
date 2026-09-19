@@ -269,6 +269,13 @@ def _apply_learned_overrides(keterangan, kategori, objek, catatan, debit, kredit
     if kategori == 'Pengeluaran Pribadi':
         return keterangan, kategori, objek
 
+    # transaksi ke/dari owner (termasuk nama yang kepotong PDF, mis. "Ahmad
+    # Roziyan Hida") -- kalau kategori sudah kadung "Modal & Setoran
+    # Pemilik" dari jalur lain (mis. shared_rules) padahal cuma karena nama
+    # owner disebut, turunkan jadi Transaksi Internal
+    if any(m in ob.upper() for m in OWNER_KEYWORDS) and kategori == 'Modal & Setoran Pemilik':
+        return 'Transaksi Internal', 'Transaksi Internal', objek
+
     # baris yang SUDAH benar terdeteksi sebagai biaya admin/bunga bank
     # tidak boleh ditimpa oleh aturan merchant/orang di bawah -- kadang
     # field "objek" mentah dari bank untuk baris potongan biaya berisi
@@ -682,9 +689,9 @@ def _categorize_raw(ket, ob, text, debit, kredit):
         return 'Gaji Bulan Ini'
 
     if any(acc in ob for acc in KNOWN_OWNER_ACCOUNTS):
-        return 'Modal & Setoran Pemilik'
+        return 'Transaksi Internal'
     if any(k in ob for k in OWNER_KEYWORDS):
-        return 'Modal & Setoran Pemilik'
+        return 'Transaksi Internal'
     if 'TARIK TUNAI' in text or ('SETOR' in text and 'SETORAN' not in ket):
         return 'Modal & Setoran Pemilik'
     if 'TARIKAN' in text and 'ATM' in text:
