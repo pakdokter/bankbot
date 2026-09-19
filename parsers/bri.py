@@ -1,7 +1,10 @@
 import re
 import sys
 import pdfplumber
-from .common import write_xlsx, apply_universal_fields, ACCOUNT_CODES, month_name, build_filename
+from .common import (
+    write_xlsx, apply_universal_fields, ACCOUNT_CODES, month_name, build_filename,
+    split_fliptech_combined_rows,
+)
 
 HEADER_RE = re.compile(
     r'^(\d{2}/\d{2}/\d{2})\s+(\d{2}:\d{2}:\d{2})\s+(.+?)\s+'
@@ -199,6 +202,7 @@ def build_rows(pdf_path):
         r.pop('_raw_desc', None)
 
     apply_universal_fields(rows, self_code, entity_code_map)
+    rows = split_fliptech_combined_rows(rows, self_code)
 
     bulan, tahun = '', ''
     if rows:

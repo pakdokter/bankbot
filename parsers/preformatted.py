@@ -11,7 +11,8 @@ import openpyxl
 from .common import (
     HEADERS, write_xlsx, build_filename, month_name, match_gaji,
     _shared_rule_match, _shared_kategori_asli_remap, enforce_recon_category,
-    AMBIGUOUS_FIRST_NAMES, _is_owner_text, OWNER_FULL_NAME,
+    AMBIGUOUS_FIRST_NAMES, _is_owner_text, OWNER_FULL_NAME, split_fliptech_combined_rows,
+    fix_subjek_objek_collisions,
 )
 
 FIELD_KEYS = ['tanggal', 'keterangan', 'kategori', 'debit', 'kredit', 'saldo', 'subjek', 'objek', 'catatan']
@@ -632,6 +633,9 @@ def build_rows(xlsx_path, sheet_name=None):
 
     if saldo_akhir is None:
         saldo_akhir = rows[-1]['saldo'] if rows else saldo_awal
+
+    fix_subjek_objek_collisions(rows)
+    rows = split_fliptech_combined_rows(rows, self_code)
 
     info = {'selisih_flags': selisih_flags}
     meta = {'self_code': self_code, 'bulan': bulan, 'tahun': tahun}

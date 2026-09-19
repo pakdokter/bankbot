@@ -868,6 +868,20 @@ def apply_universal_fields(rows, self_code='', entity_code_map=None):
                 and not r['kategori'].upper().startswith('GAJI')):
             r['keterangan'], r['kategori'] = 'Transaksi Internal', 'Transaksi Internal'
 
+        # Subjek=Objek: kalau lawan transaksi (counterparty) ke-resolve jadi
+        # IDENTIK dengan rekening sendiri (self_code) -- paling sering
+        # kejadian di baris "Transaksi Internal" saat Objek mentah dari
+        # bank kebetulan menyebut kode/nomor rekening sendiri (bukan
+        # rekening lawan yang sebenarnya) -- itu BUKAN transfer ke diri
+        # sendiri, tapi lawan transaksi yang genuinely tidak teridentifikasi.
+        # Jangan biarkan Subjek dan Objek jadi sama persis; tandai jelas
+        # untuk verifikasi manual daripada diam-diam salah.
+        if counterparty and self_code and counterparty == self_code:
+            note = (f'⚠️ Subjek=Objek terdeteksi (Objek mentah: "{raw_objek_for_check}") -- '
+                     'lawan transaksi tidak teridentifikasi, verifikasi manual')
+            counterparty = 'Rekening Lain (Belum Teridentifikasi)'
+            r['catatan'] = f"{(r.get('catatan') or '').strip()}; {note}".strip('; ')
+
         if r.get('_is_opening_balance'):
             r['subjek'], r['objek'] = '-', '-'
         elif r['kategori'] == 'Biaya Admin Bank':
@@ -878,7 +892,99 @@ def apply_universal_fields(rows, self_code='', entity_code_map=None):
             r['subjek'], r['objek'] = counterparty, (self_code or 'Rekening Ini')
         else:
             r['subjek'], r['objek'] = '', counterparty
+
+    fix_subjek_objek_collisions(rows)
     return rows
+
+
+def fix_subjek_objek_collisions(rows):
+    """Jaring pengaman terakhir yang berlaku ke SEMUA jalur (parser bank
+    PDF lewat apply_universal_fields() di atas, MAUPUN preformatted.py yang
+    mengisi subjek/objek sendiri): Subjek dan Objek TIDAK BOLEH pernah
+    keluar identik (kecuali baris Saldo Awal yang memang sengaja '-'/'-').
+    Paling sering kejadian di baris "Transaksi Internal" saat lawan
+    transaksi gagal ke-resolve dengan benar. Daripada diam-diam salah
+    (terlihat seperti transfer ke diri sendiri), Objek diturunkan ke
+    placeholder yang jelas perlu verifikasi manual."""
+    for r in rows:
+        if (r.get('subjek') and r.get('objek') and r['subjek'] == r['objek']
+                and r['subjek'] not in ('-', '')):
+            note = f'⚠️ Subjek=Objek terdeteksi ("{r["objek"]}") -- verifikasi manual'
+            r['objek'] = 'Rekening Lain (Belum Teridentifikasi)'
+            r['catatan'] = f"{(r.get('catatan') or '').strip()}; {note}".strip('; ')
+    return rows
+
+
+FLIPTECH_SPLIT_REMAINDER_MAX = 1000  # sisa di bawah ini dianggap biaya
+                                       # admin/bunga gabungan, bukan nominal genuine
+
+
+def split_fliptech_combined_rows(rows, self_code=''):
+    """Sebagian transaksi Fliptech tercatat sebagai SATU baris dengan
+    nominal gabungan (mis. -100302 = -100000 transfer + -302 biaya admin)
+    alih-alih dua baris terpisah. Kalau dibiarkan satu baris, transfer ini
+    TIDAK AKAN PERNAH cocok dengan pasangannya di rekening lain saat
+    direkonsiliasi (yang biasanya nominal genap/dibulatkan), karena selisih
+    kecil (302/dst) itu di luar toleransi pencocokan normal.
+
+    Ini versi bankbot (list-of-dict, dipanggil dari build_rows() masing2
+    parser SESUDAH apply_universal_fields) dari logika yang sama persis
+    yang sebelumnya cuma ada sebagai patch di sisi reconbot
+    (reconcile.py::split_fliptech_combined_rows) -- dipindah ke sini
+    supaya file yang keluar dari bot konversi ini sudah bersih dari awal,
+    reconbot tidak perlu lagi menambal.
+
+    Deteksi: kategori sudah "Transaksi Internal" (atau sinonim mentahnya)
+    DAN teks (Keterangan/Objek/Catatan) menyebut 'fliptech', DAN nominalnya
+    (debit atau kredit) punya sisa (nominal % 1000) yang > 0 dan < Rp1.000.
+    Baris asli dipecah jadi 2: baris pokok (nominal dibulatkan ke kelipatan
+    1000 terdekat ke arah nol) + baris baru tepat sesudahnya untuk sisanya
+    sebagai "Biaya Admin Bank" (kalau debit) / "Bunga Bank" (kalau kredit),
+    Subjek "-" / Objek = rekening sendiri, konsisten dengan konvensi Biaya
+    Admin Bank yang sudah ada di apply_universal_fields()."""
+    new_rows = []
+    for r in rows:
+        text = f"{r.get('keterangan', '')} {r.get('objek', '')} {r.get('catatan', '')}".lower()
+        kategori = (r.get('kategori') or '').strip().lower()
+        is_transfer_like = kategori in (
+            'transaksi internal', 'pindah rekening internal', 'transfer lainnya')
+        split_done = False
+        if is_transfer_like and 'fliptech' in text:
+            debit, kredit = r.get('debit'), r.get('kredit')
+            is_debit = bool(debit)
+            nominal = debit if is_debit else kredit
+            if isinstance(nominal, (int, float)) and nominal:
+                remainder = round(abs(nominal) % 1000, 2)
+                if 0 < remainder < FLIPTECH_SPLIT_REMAINDER_MAX:
+                    sign = 1 if nominal > 0 else -1
+                    main_amount = sign * round(abs(nominal) - remainder, 2)
+                    fee_amount = sign * remainder
+
+                    main_row = dict(r)
+                    if is_debit:
+                        main_row['debit'] = main_amount
+                    else:
+                        main_row['kredit'] = main_amount
+                    new_rows.append(main_row)
+
+                    fee_label = 'Biaya Admin' if sign < 0 else 'Bunga Bank'
+                    note = (f'Bagian dari transaksi Fliptech: {fee_label} '
+                            '(dipisah otomatis saat konversi)')
+                    new_rows.append({
+                        'tanggal': r.get('tanggal'),
+                        'keterangan': fee_label,
+                        'kategori': 'Biaya Admin Bank',
+                        'debit': fee_amount if sign < 0 else None,
+                        'kredit': fee_amount if sign > 0 else None,
+                        'saldo': r.get('saldo'),
+                        'subjek': '-',
+                        'objek': self_code or r.get('objek') or '-',
+                        'catatan': note,
+                    })
+                    split_done = True
+        if not split_done:
+            new_rows.append(r)
+    return new_rows
 
 
 def apply_cross_account_internal_validation(entries, amount_tolerance=1.0):

@@ -1,7 +1,10 @@
 import re
 import sys
 import pdfplumber
-from .common import write_xlsx, apply_universal_fields, ACCOUNT_CODES, month_name, build_filename
+from .common import (
+    write_xlsx, apply_universal_fields, ACCOUNT_CODES, month_name, build_filename,
+    split_fliptech_combined_rows,
+)
 
 MONTH_MAP = {
     'Jan': '01', 'Feb': '02', 'Mar': '03', 'Apr': '04', 'Mei': '05', 'May': '05',
@@ -291,6 +294,7 @@ def build_rows(pdf_path):
 
     apply_universal_fields(rows, ACCOUNT_CODES['jago'], {})
     rows = _merge_biaya_admin_rows(rows, saldo_awal, saldo_akhir)
+    rows = split_fliptech_combined_rows(rows, ACCOUNT_CODES['jago'])
 
     bulan, tahun = '', ''
     ref = rows[0] if rows else (txns[0] if txns else None)
