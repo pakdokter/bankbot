@@ -98,8 +98,9 @@ ACCOUNT_CODES = {
     'bca_417': 'BCA-417',
     'bca_giro': 'BCA-292(Biz)',
     'jago': 'Jago',
+    'bsi_288': 'BSI-288',
 }
-KNOWN_BANK_CODES = set(ACCOUNT_CODES.values()) | {'Kas/Buku'}
+KNOWN_BANK_CODES = set(ACCOUNT_CODES.values()) | {'Kas/Buku', 'Kas Buku', 'Kas Kasir'}
 FLIPTECH_LABEL = 'Rekening Lain (via Fliptech)'
 
 # --- kata kunci/orang/merchant yang sudah dikonfirmasi lewat feedback
@@ -745,6 +746,33 @@ def resolve_party(name, self_code, entity_code_map):
     return name
 
 
+def _is_own_business_account(counterparty, self_code=None):
+    """True only if `counterparty` (Objek/Subjek SESUDAH di-resolve lewat
+    resolve_party) memang salah satu rekening/entitas bisnis Stoa sendiri:
+    BRI-507, BRI-567(Biz), BCA-887/417/292(Biz), BSI-288, Jago, Kas Buku/Kas
+    Kasir, "Rekening Lain (via Fliptech)", atau "Rekening Keluarga/Owner"
+    (setoran owner). Nama orang (pegawai/vendor/pelanggan) TIDAK PERNAH
+    dianggap rekening bisnis, walau namanya owner sekalipun -- itu tetap
+    transaksi ke/dari pribadi si owner, bukan ke rekening resmi Stoa (owner
+    sendiri masuk lewat OWNER_KEYWORDS di bawah karena setoran/tarikan owner
+    memang dibukukan sebagai Transaksi Internal per kebijakan yang berlaku)."""
+    cp = (counterparty or '').strip()
+    if not cp or cp == '-':
+        return False
+    if self_code and cp == self_code:
+        return True
+    if cp in KNOWN_BANK_CODES:
+        return True
+    if cp == FLIPTECH_LABEL:
+        return True
+    up = cp.upper()
+    if 'REKENING KELUARGA' in up or 'REKENING LAIN' in up:
+        return True
+    if any(m in up for m in OWNER_KEYWORDS):
+        return True
+    return False
+
+
 def apply_universal_fields(rows, self_code='', entity_code_map=None):
     """Normalizes keterangan, fills kategori, and derives Subjek/Objek from
     transaction direction + the account holder's own short code. Call this
@@ -781,13 +809,30 @@ def apply_universal_fields(rows, self_code='', entity_code_map=None):
             if r['kategori'].strip().lower().startswith('belanja'):
                 counterparty = 'Tenant Lain'
 
-        # "Modal & Setoran Pemilik" yang counterparty-nya ternyata resolve
-        # ke salah satu rekening Stoa sendiri (bukan orang) sebenarnya
-        # transfer antar rekening biasa, bukan setoran modal -- tapi cuma
-        # kalau objek mentahnya memang ada isinya (bukan kosong yang
-        # kebetulan default ke self_code karena tidak ada info sama sekali)
-        if (raw_objek_for_check not in (None, '', '-') and counterparty in KNOWN_BANK_CODES
-                and r['kategori'] == 'Modal & Setoran Pemilik'):
+        has_objek_info = raw_objek_for_check not in (None, '', '-')
+        is_business_account = has_objek_info and _is_own_business_account(counterparty, self_code)
+
+        # BUG 1: "Transaksi Internal" (dan sinonim mentahnya "Pindah
+        # Rekening Internal"/"Transfer Lainnya" hasil kata kunci bank, mis.
+        # " TO ", "IBIZ", "NBMB") HANYA valid kalau Objek memang salah satu
+        # rekening/entitas bisnis Stoa sendiri. Kalau Objek adalah nama
+        # pegawai/vendor/pihak ketiga lain, turunkan ke kategori berbasis
+        # kata kunci biasa -- nama orang TIDAK PERNAH "Transaksi Internal".
+        if (has_objek_info
+                and r['kategori'] in ('Transaksi Internal', 'Pindah Rekening Internal', 'Transfer Lainnya')
+                and not is_business_account):
+            r['kategori'] = enforce_recon_category('Belanja Operasional' if debit else 'Transfer Lainnya')
+            if r['keterangan'] in ('Transaksi Internal', 'Pindah Rekening Internal'):
+                r['keterangan'] = normalize_keterangan(raw_ket, debit, kredit)
+
+        # BUG 2: sebaliknya, kalau Objek TERBUKTI rekening bisnis Stoa
+        # sendiri, kategori di baris ini WAJIB "Transaksi Internal" -- jangan
+        # pakai teks kategori mentah dari bank (mis. "Belanja Operasional"
+        # di satu sisi vs "Transaksi Internal" di sisi lain untuk transfer
+        # yang sama persis). Ini juga mencakup kasus lama "Modal & Setoran
+        # Pemilik" yang counterparty-nya ternyata rekening Stoa sendiri.
+        elif (is_business_account
+                and r['kategori'] not in ('Transaksi Internal', 'Biaya Admin Bank')):
             r['keterangan'], r['kategori'] = 'Transaksi Internal', 'Transaksi Internal'
 
         if r.get('_is_opening_balance'):
@@ -801,6 +846,56 @@ def apply_universal_fields(rows, self_code='', entity_code_map=None):
         else:
             r['subjek'], r['objek'] = '', counterparty
     return rows
+
+
+def apply_cross_account_internal_validation(entries, amount_tolerance=1.0):
+    """BUG 2 (validasi silang tambahan): dipanggil sekali saat beberapa
+    rekening Stoa digabung jadi satu file (mis. /gabung di bot.py), SESUDAH
+    semua rekening masing-masing sudah lewat apply_universal_fields().
+    Kadang identitas lawan transaksi tidak terbaca lewat resolve_party()
+    (mis. label objek mentahnya beda dari kode rekening yang dikenal), tapi
+    kalau ada baris Debit di satu rekening dan baris Kredit di rekening LAIN
+    dalam gabungan yang sama, tanggal sama, dan nominal sama (dalam
+    toleransi kecil), itu hampir pasti transfer internal antar rekening
+    Stoa sendiri -- paksa KEDUA baris jadi 'Transaksi Internal', apa pun
+    kategori mentah yang sebelumnya terpasang di masing-masing sisi.
+
+    entries: list of dict {'sheet_title'/'label', 'rows': [...]}. Rows
+    dimodifikasi in-place; fungsi ini juga mengembalikan `entries` yang sama
+    untuk kenyamanan chaining."""
+    debit_candidates = []
+    kredit_candidates = []
+    for e_idx, e in enumerate(entries):
+        for r in e.get('rows', []):
+            if r.get('kategori') == 'Transaksi Internal':
+                continue
+            if r.get('debit'):
+                debit_candidates.append((e_idx, r))
+            elif r.get('kredit'):
+                kredit_candidates.append((e_idx, r))
+
+    used_kredit_ids = set()
+    for e_idx_d, rd in debit_candidates:
+        if rd.get('kategori') == 'Transaksi Internal':
+            continue
+        amt_d = abs(rd['debit'])
+        tgl_d = rd.get('tanggal')
+        for e_idx_k, rk in kredit_candidates:
+            if e_idx_k == e_idx_d or id(rk) in used_kredit_ids:
+                continue
+            if rk.get('kategori') == 'Transaksi Internal':
+                continue
+            if rk.get('tanggal') != tgl_d:
+                continue
+            if abs(abs(rk['kredit']) - amt_d) > amount_tolerance:
+                continue
+            rd['kategori'] = 'Transaksi Internal'
+            rd['keterangan'] = 'Transaksi Internal'
+            rk['kategori'] = 'Transaksi Internal'
+            rk['keterangan'] = 'Transaksi Internal'
+            used_kredit_ids.add(id(rk))
+            break
+    return entries
 
 
 def _ensure_no_blank_fields(r, self_code=''):
