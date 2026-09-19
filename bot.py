@@ -1,3 +1,4 @@
+import functools
 import logging
 import os
 import tempfile
@@ -28,6 +29,29 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.environ.get('BOT_TOKEN', '')
+
+# --- akses terbatas: hanya user Telegram dengan ID di bawah ini yang boleh
+# pakai bot ini sama sekali -- semua user lain otomatis "access denied".
+ADMIN_IDS = {6971888923, 998967085}
+
+
+def _require_admin(func):
+    """Decorator untuk setiap command/message/callback handler yang jadi
+    entry point langsung dari Telegram -- menolak siapa pun yang user ID-nya
+    tidak ada di ADMIN_IDS sebelum handler aslinya sempat jalan."""
+    @functools.wraps(func)
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
+        user = update.effective_user
+        user_id = user.id if user else None
+        if user_id not in ADMIN_IDS:
+            logger.warning('Akses ditolak untuk user_id=%s (%s)', user_id, getattr(user, 'username', None))
+            if update.callback_query:
+                await update.callback_query.answer('Access denied.', show_alert=True)
+            elif update.message:
+                await update.message.reply_text('Access denied. Kamu tidak punya izin memakai bot ini.')
+            return
+        return await func(update, context, *args, **kwargs)
+    return wrapper
 
 WELCOME = (
     "Halo! Kirim aku:\n"
@@ -61,6 +85,7 @@ def _session_add(chat_id, label, rows, saldo_awal, saldo_akhir, meta=None):
     })
 
 
+@_require_admin
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(WELCOME)
 
@@ -167,6 +192,7 @@ async def handle_xlsx(update: Update, context: ContextTypes.DEFAULT_TYPE, doc, t
     return xlsx_path, caption_lines
 
 
+@_require_admin
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     doc = update.message.document
     if not doc:
@@ -256,6 +282,7 @@ def _gabung_keyboard(chat_id):
     return InlineKeyboardMarkup(rows)
 
 
+@_require_admin
 async def sesi_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     entries = SESSIONS.get(chat_id, [])
@@ -269,6 +296,7 @@ async def sesi_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+@_require_admin
 async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     count = len(SESSIONS.get(chat_id, []))
@@ -280,6 +308,7 @@ async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text('Sesi memang sudah kosong.')
 
 
+@_require_admin
 async def gabung_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     entries = SESSIONS.get(chat_id, [])
@@ -299,6 +328,7 @@ async def gabung_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+@_require_admin
 async def selesai_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     entries = SESSIONS.get(chat_id, [])
@@ -352,6 +382,7 @@ async def _merge_and_deliver(context, chat_id, chosen, edit_message):
             await context.bot.send_document(chat_id=chat_id, document=f, filename=os.path.basename(out_path))
 
 
+@_require_admin
 async def gabung_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     chat_id = update.effective_chat.id
