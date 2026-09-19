@@ -379,6 +379,12 @@ def _apply_learned_overrides(keterangan, kategori, objek, catatan, debit, kredit
 # Tetap belum 100% akurat untuk semua kasus (lihat catatan di bawah).
 
 OWNER_KEYWORDS = ('AHMAD ROZIY', 'ROZIYAN HIDAYAT', 'OJAN', 'OWNER')
+# nama lengkap resmi owner -- dipakai untuk MENULIS ULANG Subjek/Objek
+# begitu salah satu varian di OWNER_KEYWORDS terdeteksi (apa pun bentuk
+# mentahnya dari hasil scan/ekstraksi PDF tiap bank -- terpotong, tanpa
+# spasi, disingkat, dsb), supaya Subjek/Objek selalu konsisten satu nama
+# lengkap yang sama di semua rekening, bukan macam-macam varian tulisan.
+OWNER_FULL_NAME = 'Ahmad Roziyan Hidayat'
 
 
 def _normalize_name_text(s):
@@ -754,7 +760,11 @@ def _categorize_raw(ket, ob, text, debit, kredit):
 
 def resolve_party(name, self_code, entity_code_map):
     """Map a raw counterparty name to a short account code if it's one of
-    Stoa's own known accounts; otherwise return the name unchanged."""
+    Stoa's own known accounts; otherwise return the name unchanged. Kalau
+    namanya adalah salah satu varian owner (apa pun bentuk mentahnya dari
+    hasil scan PDF -- terpotong, tanpa spasi, disingkat), selalu ditulis
+    ulang jadi OWNER_FULL_NAME supaya Subjek/Objek konsisten satu nama
+    lengkap yang sama, tidak macam-macam varian tulisan di tiap rekening."""
     if not name:
         return name
     up = name.upper()
@@ -763,6 +773,8 @@ def resolve_party(name, self_code, entity_code_map):
     for needle, code in entity_code_map.items():
         if needle in up:
             return code
+    if _is_owner_text(up):
+        return OWNER_FULL_NAME
     return name
 
 
