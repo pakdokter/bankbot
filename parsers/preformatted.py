@@ -11,7 +11,7 @@ import openpyxl
 from .common import (
     HEADERS, write_xlsx, build_filename, month_name, match_gaji,
     _shared_rule_match, _shared_kategori_asli_remap, enforce_recon_category,
-    AMBIGUOUS_FIRST_NAMES,
+    AMBIGUOUS_FIRST_NAMES, _is_owner_text,
 )
 
 FIELD_KEYS = ['tanggal', 'keterangan', 'kategori', 'debit', 'kredit', 'saldo', 'subjek', 'objek', 'catatan']
@@ -149,11 +149,12 @@ def _vendor_from_belanja(desc):
     return employee, None, rest
 
 
-def _apply_keyword_overrides(keterangan, kategori, objek, catatan, is_kredit=False, debit=None):
+def _apply_keyword_overrides(keterangan, kategori, objek, catatan, is_kredit=False, debit=None, subjek=None):
     """Returns (keterangan, kategori, objek) after applying every keyword
     rule confirmed via feedback. Order matters: more specific rules first."""
     text = f'{keterangan} {catatan}'.upper()
     ob_upper = (objek or '').strip().upper()
+    subjek_upper = (subjek or '').strip().upper()
 
     if ob_upper in MODAL_MASUK_NAMES or MODAL_MASUK_KETERANGAN_RE.match(keterangan.strip()):
         return 'Modal Masuk', 'Modal & Setoran Pemilik', objek
@@ -165,11 +166,14 @@ def _apply_keyword_overrides(keterangan, kategori, objek, catatan, is_kredit=Fal
     if any(k in f'{text} {ob_upper}' for k in ('PRIBADI', 'PERSONAL', 'BUAT SENDIRI')):
         return keterangan, 'Pengeluaran Pribadi', objek
 
-    # transaksi ke/dari owner (termasuk nama yang kepotong PDF, mis. "Ahmad
-    # Roziyan Hida") -- kalau kategori sumbernya sudah kadung "Modal &
-    # Setoran Pemilik" padahal keterangannya generik (bukan penanda modal
-    # eksplisit), turunkan jadi Transaksi Internal
-    if any(m in ob_upper for m in OWNER_MARKERS) and kategori == 'Modal & Setoran Pemilik':
+    # transaksi ke/dari owner (Objek ATAU Subjek, termasuk nama yang kepotong
+    # atau kehilangan spasi dari ekstraksi PDF, mis. "Ahmad Roziyan Hida"
+    # atau "AHMADROZIYANHIDAYA") -- selalu Transaksi Internal, apa pun
+    # wording kategori mentah sumbernya (mis. "Modal & Setoran Pemilik" atau
+    # kategori lain yang tidak dikenal bot rekonsiliasi), KECUALI kalau
+    # sudah kena penanda eksplisit Pengeluaran Pribadi/Gaji di atas.
+    if (_is_owner_text(ob_upper) or _is_owner_text(subjek_upper)) and kategori not in (
+            'Transaksi Internal', 'Pengeluaran Pribadi') and not (kategori or '').upper().startswith('GAJI'):
         return 'Transaksi Internal', 'Transaksi Internal', objek
 
     if KOREKSI_RE.search(keterangan):
@@ -193,7 +197,7 @@ def _apply_keyword_overrides(keterangan, kategori, objek, catatan, is_kredit=Fal
         # "Ahmad Roziyan Hida") default-nya sekarang Transaksi Internal,
         # bukan Modal & Setoran Pemilik -- modal cuma kalau ada penanda
         # eksplisit (dicek terpisah lewat MODAL_MASUK_NAMES/shared_rules)
-        if is_kredit and any(m in employee_name.upper() for m in OWNER_MARKERS):
+        if is_kredit and _is_owner_text(employee_name):
             return 'Transaksi Internal', 'Transaksi Internal', employee_name
         # kalau nama yang diekstrak dari KETERANGAN cuma nama depan yang
         # ambigu (mis. "Baiq" -- dipakai >1 pegawai), dan Objek yang SUDAH
@@ -545,7 +549,7 @@ def build_rows(xlsx_path, sheet_name=None):
                 m_v = VENDOR_ITEM_RE.match(main_item)
                 vendor_guess = m_v.group(1).strip() if m_v else (objek if objek and objek != '-' else None)
                 item_only = m_v.group(2).strip() if m_v else main_item
-                ket1, kat1, obj1 = _apply_keyword_overrides(main_item, kategori, objek, catatan, is_kredit=False, debit=main_amt)
+                ket1, kat1, obj1 = _apply_keyword_overrides(main_item, kategori, objek, catatan, is_kredit=False, debit=main_amt, subjek=subjek)
                 _emit({
                     'tanggal': tgl_str, 'keterangan': ket1, 'kategori': kat1,
                     'debit': main_amt, 'kredit': None, 'saldo': None,
@@ -567,7 +571,7 @@ def build_rows(xlsx_path, sheet_name=None):
                 })
             else:
                 base_amt = debit + PARKIR_AMOUNT
-                ket1, kat1, obj1 = _apply_keyword_overrides(base_desc, kategori, objek, catatan, is_kredit=False, debit=base_amt)
+                ket1, kat1, obj1 = _apply_keyword_overrides(base_desc, kategori, objek, catatan, is_kredit=False, debit=base_amt, subjek=subjek)
                 if obj1 == 'Tenant Lain' and not VENDOR_ITEM_RE.match(base_desc) and not re.match(r'^BELANJA\s+', base_desc, re.I):
                     # base_desc cuma nama vendor polos tanpa rincian item, mis. "Fadhilah"
                     obj1 = base_desc
@@ -586,7 +590,7 @@ def build_rows(xlsx_path, sheet_name=None):
             continue
 
         keterangan, kategori, objek = _apply_keyword_overrides(
-            keterangan, kategori, objek, catatan, is_kredit=(kredit is not None), debit=debit
+            keterangan, kategori, objek, catatan, is_kredit=(kredit is not None), debit=debit, subjek=subjek
         )
 
         if kategori == 'Penjualan':
