@@ -16,6 +16,10 @@ from .common import (
 
 FIELD_KEYS = ['tanggal', 'keterangan', 'kategori', 'debit', 'kredit', 'saldo', 'subjek', 'objek', 'catatan']
 HEADER_NAME_MAP = {h.upper(): key for h, key in zip(HEADERS, FIELD_KEYS)}
+# kompatibilitas mundur: file lama/manual yang masih pakai header kolom B
+# yang lama ("Keterangan Transaksi") sebelum diganti "Items / Activities"
+# tetap harus dikenali sebagai kolom keterangan
+HEADER_NAME_MAP['KETERANGAN TRANSAKSI'] = 'keterangan'
 SELISIH_NAMES = {'SELISIH', 'SELISIH VS SALDO TERCATAT'}
 
 # --- aturan yang sudah dikonfirmasi lewat feedback -- berlaku untuk semua
@@ -30,7 +34,11 @@ TENANT_ALIASES = {
     'PRIMER RAYA': 'Primer',
     'PRIMER': 'Primer',
 }
-OWNER_MARKERS = ('OWNER', 'AHMAD ROZIYAN', 'ROZIYAN HIDAYAT', 'OJAN', 'KAK OJAN')
+# NB: OWNER_MARKERS sudah tidak dipakai langsung -- deteksi owner sekarang
+# lewat _is_owner_text() (common.py), yang otomatis ikut OWNER_KEYWORDS di
+# sana (termasuk alias "Ahmad Roziy..." dan varian tanpa spasi). Konstanta
+# ini dipertahankan cuma untuk dokumentasi/referensi.
+OWNER_MARKERS = ('OWNER', 'AHMAD ROZIY', 'ROZIYAN HIDAYAT', 'OJAN', 'KAK OJAN')
 GENERIC_UNRESOLVED_CATEGORIES = {'TRANSFER KELUAR', 'PENGELUARAN', 'TRANSFER LAINNYA'}
 
 # kata kunci -> (kategori, objek_atau_None). Dicek pada gabungan teks
