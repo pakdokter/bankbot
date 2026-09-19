@@ -30,7 +30,7 @@ TENANT_ALIASES = {
     'PRIMER RAYA': 'Primer',
     'PRIMER': 'Primer',
 }
-OWNER_MARKERS = ('OWNER', 'ROZIYAN HIDAYAT', 'OJAN', 'KAK OJAN', 'AHMAD ROZIYAN HIDAYAT')
+OWNER_MARKERS = ('OWNER', 'AHMAD ROZIYAN', 'ROZIYAN HIDAYAT', 'OJAN', 'KAK OJAN')
 GENERIC_UNRESOLVED_CATEGORIES = {'TRANSFER KELUAR', 'PENGELUARAN', 'TRANSFER LAINNYA'}
 
 # kata kunci -> (kategori, objek_atau_None). Dicek pada gabungan teks
@@ -165,6 +165,13 @@ def _apply_keyword_overrides(keterangan, kategori, objek, catatan, is_kredit=Fal
     if any(k in f'{text} {ob_upper}' for k in ('PRIBADI', 'PERSONAL', 'BUAT SENDIRI')):
         return keterangan, 'Pengeluaran Pribadi', objek
 
+    # transaksi ke/dari owner (termasuk nama yang kepotong PDF, mis. "Ahmad
+    # Roziyan Hida") -- kalau kategori sumbernya sudah kadung "Modal &
+    # Setoran Pemilik" padahal keterangannya generik (bukan penanda modal
+    # eksplisit), turunkan jadi Transaksi Internal
+    if any(m in ob_upper for m in OWNER_MARKERS) and kategori == 'Modal & Setoran Pemilik':
+        return 'Transaksi Internal', 'Transaksi Internal', objek
+
     if KOREKSI_RE.search(keterangan):
         return 'Tip/Minus', 'Tip/Minus/Lebih', objek
 
@@ -182,10 +189,12 @@ def _apply_keyword_overrides(keterangan, kategori, objek, catatan, is_kredit=Fal
     gaji = match_gaji(keterangan)
     if gaji:
         employee_name, _bulan_gaji = gaji
-        # gaji milik owner yang MASUK (bukan Stoa menggaji dia) sebenarnya
-        # penghasilan luar yang disuntikkan sebagai modal, bukan beban gaji
+        # transaksi ke/dari owner (termasuk nama yang kepotong PDF, mis.
+        # "Ahmad Roziyan Hida") default-nya sekarang Transaksi Internal,
+        # bukan Modal & Setoran Pemilik -- modal cuma kalau ada penanda
+        # eksplisit (dicek terpisah lewat MODAL_MASUK_NAMES/shared_rules)
         if is_kredit and any(m in employee_name.upper() for m in OWNER_MARKERS):
-            return 'Modal Masuk', 'Modal & Setoran Pemilik', employee_name
+            return 'Transaksi Internal', 'Transaksi Internal', employee_name
         # kalau nama yang diekstrak dari KETERANGAN cuma nama depan yang
         # ambigu (mis. "Baiq" -- dipakai >1 pegawai), dan Objek yang SUDAH
         # ADA di baris ini ternyata lebih detail (nama lengkap, bukan cuma
