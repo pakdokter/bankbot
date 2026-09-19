@@ -274,7 +274,7 @@ def _apply_learned_overrides(keterangan, kategori, objek, catatan, debit, kredit
     # Roziyan Hida") -- kalau kategori sudah kadung "Modal & Setoran
     # Pemilik" dari jalur lain (mis. shared_rules) padahal cuma karena nama
     # owner disebut, turunkan jadi Transaksi Internal
-    if any(m in ob.upper() for m in OWNER_KEYWORDS) and kategori == 'Modal & Setoran Pemilik':
+    if _is_owner_text(ob) and kategori == 'Modal & Setoran Pemilik':
         return 'Transaksi Internal', 'Transaksi Internal', objek
 
     # baris yang SUDAH benar terdeteksi sebagai biaya admin/bunga bank
@@ -379,6 +379,26 @@ def _apply_learned_overrides(keterangan, kategori, objek, catatan, debit, kredit
 # Tetap belum 100% akurat untuk semua kasus (lihat catatan di bawah).
 
 OWNER_KEYWORDS = ('AHMAD ROZIYAN', 'ROZIYAN HIDAYAT', 'OJAN', 'OWNER')
+
+
+def _normalize_name_text(s):
+    """Buang semua karakter selain huruf (spasi, titik, dsb) supaya varian
+    penulisan nama yang beda-beda spasi/format tetap kecocokan -- mis. PDF
+    yang memotong nama JADI SATU KATA TANPA SPASI seperti
+    'AHMADROZIYANHIDAYA' tetap kena aturan owner, bukan cuma varian yang ada
+    spasinya seperti 'AHMAD ROZIYAN HIDA'."""
+    return re.sub(r'[^A-Z]', '', (s or '').upper())
+
+
+_OWNER_KEYWORDS_NORMALIZED = tuple(_normalize_name_text(k) for k in OWNER_KEYWORDS)
+
+
+def _is_owner_text(text):
+    """True kalau `text` (Objek/Subjek mentah, apa pun formatnya) menyebut
+    owner (Ahmad Roziyan Hidayat / Ojan / Owner), termasuk varian nama yang
+    kepotong atau kehilangan spasi dari ekstraksi PDF."""
+    norm = _normalize_name_text(text)
+    return any(k in norm for k in _OWNER_KEYWORDS_NORMALIZED)
 DEBT_KEYWORDS = ('CICILAN', 'ANGSURAN', 'BAYAR SB', 'PINJAM', 'UTANG')
 UTILITY_KEYWORDS = ('SEWA', ' PLN', 'AIR STO', 'UTILITAS')
 WALLET_KEYWORDS = ('SHOPEE', 'OVO ', ' OVO', 'GOPAY', 'DANA ', 'TELKOMSEL', 'TOP UP', 'ISI SALDO', 'PULSA', 'BRIVA')
@@ -691,7 +711,7 @@ def _categorize_raw(ket, ob, text, debit, kredit):
 
     if any(acc in ob for acc in KNOWN_OWNER_ACCOUNTS):
         return 'Transaksi Internal'
-    if any(k in ob for k in OWNER_KEYWORDS):
+    if _is_owner_text(ob):
         return 'Transaksi Internal'
     if 'TARIK TUNAI' in text or ('SETOR' in text and 'SETORAN' not in ket):
         return 'Modal & Setoran Pemilik'
@@ -768,7 +788,7 @@ def _is_own_business_account(counterparty, self_code=None):
     up = cp.upper()
     if 'REKENING KELUARGA' in up or 'REKENING LAIN' in up:
         return True
-    if any(m in up for m in OWNER_KEYWORDS):
+    if _is_owner_text(up):
         return True
     return False
 
@@ -832,7 +852,8 @@ def apply_universal_fields(rows, self_code='', entity_code_map=None):
         # yang sama persis). Ini juga mencakup kasus lama "Modal & Setoran
         # Pemilik" yang counterparty-nya ternyata rekening Stoa sendiri.
         elif (is_business_account
-                and r['kategori'] not in ('Transaksi Internal', 'Biaya Admin Bank')):
+                and r['kategori'] not in ('Transaksi Internal', 'Biaya Admin Bank', 'Pengeluaran Pribadi')
+                and not r['kategori'].upper().startswith('GAJI')):
             r['keterangan'], r['kategori'] = 'Transaksi Internal', 'Transaksi Internal'
 
         if r.get('_is_opening_balance'):
